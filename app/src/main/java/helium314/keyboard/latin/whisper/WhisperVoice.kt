@@ -41,7 +41,6 @@ object WhisperVoice {
     const val CODE_OTHER_LANGUAGE = -10_233
 
     private const val RATE = 16_000
-    private const val SILENCE_MS = 1_500
     private const val NO_SPEECH_MS = 8_000
     private const val MAX_MS = 180_000
     private const val SPEECH_RMS = 700.0
@@ -54,6 +53,17 @@ object WhisperVoice {
     private val main = Handler(Looper.getMainLooper())
 
     val isEnabled get() = BuildConfig.WHISPER_URL.isNotEmpty()
+
+    // user settings, changed in WhisperSettingsActivity
+    const val PREFS = "whisper"
+    const val KEY_URL = "url"
+    const val KEY_SILENCE_MS = "silence_ms"
+    const val KEY_OTHER_LANG = "other_lang"
+    const val DEFAULT_SILENCE_MS = 3_000
+    const val DEFAULT_OTHER_LANG = "en"
+    fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
+    fun otherLanguage(context: Context) = prefs(context).getString(KEY_OTHER_LANG, DEFAULT_OTHER_LANG)!!.trim().ifEmpty { null }
 
     /**
      * Mic key pressed. [language] is an ISO code ("et", "en") or null for auto-detect.
@@ -73,14 +83,16 @@ object WhisperVoice {
         }
         stopRequested = false
         cancelled = false
+        val silenceMs = prefs(context).getInt(KEY_SILENCE_MS, DEFAULT_SILENCE_MS)
+        val url = url(context)
         setState(State.RECORDING, root)
         thread(name = "whisper") {
             val text = try {
-                val pcm = record()
+                val pcm = record(silenceMs)
                 if (pcm == null || cancelled) null
                 else {
                     main.post { setState(State.SENDING, root) }
-                    transcribe(wav(pcm), language)
+                    transcribe(url, wav(pcm), language)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "voice input failed", e)
@@ -103,7 +115,7 @@ object WhisperVoice {
     }
 
     @SuppressLint("MissingPermission") // checked in onMicKey
-    private fun record(): ByteArray? {
+    private fun record(silenceMs: Int): ByteArray? {
         val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, RATE))
@@ -125,7 +137,7 @@ object WhisperVoice {
                 val ms = n * 1000 / RATE
                 totalMs += ms
                 if (sqrt(sum / n) > SPEECH_RMS) { heardSpeech = true; quietMs = 0 } else quietMs += ms
-                if (heardSpeech && quietMs >= SILENCE_MS) break
+                if (heardSpeech && quietMs >= silenceMs) break
                 if (!heardSpeech && totalMs >= NO_SPEECH_MS) return null
             }
         } finally {
@@ -144,7 +156,7 @@ object WhisperVoice {
         return h.array() + pcm
     }
 
-    private fun transcribe(wav: ByteArray, language: String?): String {
+    private fun transcribe(url: String, wav: ByteArray, language: String?): String {
         val boundary = "----heliboard${System.nanoTime()}"
         val body = ByteArrayOutputStream()
         fun field(name: String, value: String) = body.write(
@@ -157,7 +169,7 @@ object WhisperVoice {
         body.write(wav)
         body.write("\r\n--$boundary--\r\n".toByteArray())
 
-        val conn = URL(BuildConfig.WHISPER_URL).openConnection() as HttpURLConnection
+        val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
             conn.doOutput = true

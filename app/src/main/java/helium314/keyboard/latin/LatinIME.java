@@ -1433,7 +1433,8 @@ public class LatinIME extends InputMethodService implements
         if (WhisperVoice.INSTANCE.isEnabled() && (KeyCode.VOICE_INPUT == event.getKeyCode()
                 || WhisperVoice.CODE_OTHER_LANGUAGE == event.getKeyCode())) {
             final String lang = mRichImm.getCurrentSubtypeLocale().getLanguage();
-            final String other = "en".equals(lang) ? null : "en";
+            final String otherPref = WhisperVoice.INSTANCE.otherLanguage(this);
+            final String other = lang.equals(otherPref) ? null : otherPref;
             WhisperVoice.INSTANCE.onMicKey(this,
                     KeyCode.VOICE_INPUT == event.getKeyCode() ? lang : other,
                     getWindow().getWindow() == null ? null : getWindow().getWindow().getDecorView(),

@@ -7,11 +7,13 @@ another voice keyboard. Switching keyboards loses the text field in some apps
 
 ## Use
 
-- Tap mic: recording starts (mic turns red). Tap again, or stop talking for 1.5 s: the audio is
+- Tap mic: recording starts (mic turns red). Tap again, or stop talking for 3 s: the audio is
   sent (mic turns orange) and the text is typed into the field.
 - Long-press mic: the same in English (when the keyboard language is not English).
 - Language of a tap = language of the current keyboard layout.
 - First tap asks for the microphone permission.
+- Settings: launcher icon **Whisper** — pause before sending (default 3 s), long-press language
+  (default `en`), server address. Changes apply to the next recording, no rebuild needed.
 
 ## Build
 
