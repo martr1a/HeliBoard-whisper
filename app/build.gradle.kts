@@ -20,6 +20,21 @@ android {
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
         }
         proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        // Whisper voice input is off unless a build type sets WHISPER_URL
+        buildConfigField("String", "WHISPER_URL", "\"\"")
+        buildConfigField("String", "WHISPER_MODEL", "\"whisper-1\"")
+        buildConfigField("String", "WHISPER_KEY", "\"\"")
+    }
+
+    signingConfigs {
+        create("whisper") {
+            // keystore lives outside the repo; see WHISPER.md
+            val ks = System.getenv("WHISPER_KEYSTORE") ?: "${System.getProperty("user.home")}/.config/heliboard-whisper/release.jks"
+            storeFile = file(ks)
+            storePassword = System.getenv("WHISPER_KEYSTORE_PASSWORD") ?: ""
+            keyAlias = "heliboard-whisper"
+            keyPassword = System.getenv("WHISPER_KEYSTORE_PASSWORD") ?: ""
+        }
     }
 
     buildTypes {
@@ -28,6 +43,14 @@ android {
             isShrinkResources = false
             isDebuggable = false
             isJniDebuggable = false
+        }
+        create("whisper") { // release + built-in Whisper voice input, installs next to normal HeliBoard
+            initWith(getByName("release"))
+            applicationIdSuffix = ".whisper"
+            versionNameSuffix = "-whisper"
+            signingConfig = signingConfigs.getByName("whisper")
+            matchingFallbacks += listOf("release")
+            buildConfigField("String", "WHISPER_URL", "\"" + (System.getenv("WHISPER_URL") ?: "https://whisper.example.org/v1/audio/transcriptions") + "\"")
         }
         create("nouserlib") { // same as release, but does not allow the user to provide a library
             isMinifyEnabled = true

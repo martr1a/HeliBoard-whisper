@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="english_ime_name" translatable="false">HeliBoard Whisper</string>
+    <string name="spell_checker_service_name" translatable="false">HeliBoard Whisper Spell Checker</string>
+    <string name="ime_settings" translatable="false">HeliBoard Whisper Settings</string>
+    <string name="clipboard_provider_authority" translatable="false">helium314.keyboard.whisper.clipprovider</string>
+    <string name="gesture_data_provider_authority" translatable="false">helium314.keyboard.whisper.provider</string>
+</resources>

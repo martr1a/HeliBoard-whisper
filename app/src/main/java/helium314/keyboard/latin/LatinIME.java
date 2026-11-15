@@ -72,6 +72,7 @@ import helium314.keyboard.latin.suggestions.SuggestionStripView;
 import helium314.keyboard.latin.suggestions.SuggestionStripViewAccessor;
 import helium314.keyboard.latin.touchinputconsumer.GestureConsumer;
 import helium314.keyboard.latin.utils.ColorUtilKt;
+import helium314.keyboard.latin.whisper.WhisperVoice;
 import helium314.keyboard.latin.utils.FloatingKeyboardUtils;
 import helium314.keyboard.latin.utils.FoldableUtils;
 import helium314.keyboard.latin.utils.GestureDataGatheringKt;
@@ -805,6 +806,7 @@ public class LatinIME extends InputMethodService implements
     @Override
     public void onFinishInputView(final boolean finishingInput) {
         StatsUtils.onFinishInputView();
+        WhisperVoice.INSTANCE.cancel();
         mHandler.onFinishInputView(finishingInput);
         mStatsUtilsManager.onFinishInputView();
         mGestureConsumer = GestureConsumer.NULL_GESTURE_CONSUMER;
@@ -1428,6 +1430,16 @@ public class LatinIME extends InputMethodService implements
     // This method is public for testability of LatinIME, but also in the future it should
     // completely replace #onCodeInput.
     public void onEvent(@NonNull final Event event) {
+        if (WhisperVoice.INSTANCE.isEnabled() && (KeyCode.VOICE_INPUT == event.getKeyCode()
+                || WhisperVoice.CODE_OTHER_LANGUAGE == event.getKeyCode())) {
+            final String lang = mRichImm.getCurrentSubtypeLocale().getLanguage();
+            final String other = "en".equals(lang) ? null : "en";
+            WhisperVoice.INSTANCE.onMicKey(this,
+                    KeyCode.VOICE_INPUT == event.getKeyCode() ? lang : other,
+                    getWindow().getWindow() == null ? null : getWindow().getWindow().getDecorView(),
+                    text -> { onTextInput(text); return kotlin.Unit.INSTANCE; });
+            return;
+        }
         if (KeyCode.VOICE_INPUT == event.getKeyCode()) {
             mRichImm.switchToShortcutIme(this);
         }
