@@ -98,7 +98,7 @@ fun getCodeForToolbarKey(key: ToolbarKey) = Settings.getInstance().getCustomTool
 }
 
 fun getCodeForToolbarKeyLongClick(key: ToolbarKey) = Settings.getInstance().getCustomToolbarLongpressCode(key) ?: when (key) {
-    VOICE -> if (helium314.keyboard.latin.whisper.WhisperVoice.isEnabled) helium314.keyboard.latin.whisper.WhisperVoice.CODE_OTHER_LANGUAGE else KeyCode.UNSPECIFIED
+    VOICE -> if (helium314.keyboard.latin.whisper.WhisperVoice.isEnabled) helium314.keyboard.latin.whisper.WhisperVoice.CODE_NEXT_LANGUAGE else KeyCode.UNSPECIFIED
     CLIPBOARD -> KeyCode.CLIPBOARD_PASTE
     UNDO -> KeyCode.REDO
     REDO -> KeyCode.UNDO

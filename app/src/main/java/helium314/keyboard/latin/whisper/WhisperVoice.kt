@@ -26,6 +26,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Locale
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
 
@@ -37,8 +38,8 @@ import kotlin.math.sqrt
  */
 object WhisperVoice {
     private const val TAG = "WhisperVoice"
-    /** long-press code of the toolbar mic key: record in the other language */
-    const val CODE_OTHER_LANGUAGE = -10_233
+    /** long-press code of the toolbar mic key: switch to the next voice language */
+    const val CODE_NEXT_LANGUAGE = -10_233
 
     private const val RATE = 16_000
     private const val NO_SPEECH_MS = 8_000
@@ -58,12 +59,51 @@ object WhisperVoice {
     const val PREFS = "whisper"
     const val KEY_URL = "url"
     const val KEY_SILENCE_MS = "silence_ms"
-    const val KEY_OTHER_LANG = "other_lang"
+    const val KEY_LANGS = "languages"
+    const val KEY_LANG_INDEX = "language_index"
     const val DEFAULT_SILENCE_MS = 3_000
-    const val DEFAULT_OTHER_LANG = "en"
+    const val DEFAULT_LANGS = "auto, et, en"
     fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
-    fun otherLanguage(context: Context) = prefs(context).getString(KEY_OTHER_LANG, DEFAULT_OTHER_LANG)!!.trim().ifEmpty { null }
+
+    /** voice languages in long-press order; "auto" = let Whisper detect */
+    fun languages(context: Context): List<String> =
+        prefs(context).getString(KEY_LANGS, DEFAULT_LANGS)!!.split(',', ' ', ';')
+            .map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+
+    /** selected voice language; the keyboard language when no list is set */
+    private fun selected(context: Context, keyboardLang: String): String {
+        val langs = languages(context)
+        if (langs.isEmpty()) return keyboardLang
+        return langs[prefs(context).getInt(KEY_LANG_INDEX, 0).mod(langs.size)]
+    }
+
+    /** Mic key: tap records in the selected language, long-press selects the next language. */
+    fun onKey(context: Context, code: Int, keyboardLang: String, root: View?, commit: (String) -> Unit) {
+        if (code == CODE_NEXT_LANGUAGE) {
+            val langs = languages(context)
+            if (langs.size > 1) {
+                val i = prefs(context).getInt(KEY_LANG_INDEX, 0)
+                prefs(context).edit().putInt(KEY_LANG_INDEX, (i + 1).mod(langs.size)).apply()
+            }
+            root?.let { showLanguage(context, it, keyboardLang) }
+            return
+        }
+        val lang = selected(context, keyboardLang)
+        onMicKey(context, lang.takeIf { it != "auto" }, root, commit)
+    }
+
+    /** Write the selected language (ET, EN, AUTO) on the mic key. */
+    fun showLanguage(context: Context, root: View, keyboardLang: String? = null) {
+        val sel = selected(context, keyboardLang ?: Locale.getDefault().language)
+        val lang = if (sel == "auto") "" else sel.uppercase(Locale.ROOT) // auto: plain mic
+        forMicKeys(root) { v ->
+            val d = v.drawable ?: return@forMicKeys
+            val badge = d as? LanguageBadgeDrawable ?: LanguageBadgeDrawable(d).also { v.setImageDrawable(it) }
+            badge.text = lang
+            v.invalidate()
+        }
+    }
 
     /**
      * Mic key pressed. [language] is an ISO code ("et", "en") or null for auto-detect.
@@ -201,10 +241,12 @@ object WhisperVoice {
         root?.let { tintMicKeys(it, color) }
     }
 
-    private fun tintMicKeys(v: View, color: Int?) {
-        if (v.tag == ToolbarKey.VOICE && v is ImageView) {
-            if (color == null) v.clearColorFilter() else v.setColorFilter(color, PorterDuff.Mode.SRC_IN)
-        }
-        if (v is ViewGroup) for (i in 0 until v.childCount) tintMicKeys(v.getChildAt(i), color)
+    private fun tintMicKeys(root: View, color: Int?) = forMicKeys(root) { v ->
+        if (color == null) v.clearColorFilter() else v.setColorFilter(color, PorterDuff.Mode.SRC_IN)
+    }
+
+    private fun forMicKeys(v: View, action: (ImageView) -> Unit) {
+        if (v.tag == ToolbarKey.VOICE && v is ImageView) action(v)
+        if (v is ViewGroup) for (i in 0 until v.childCount) forMicKeys(v.getChildAt(i), action)
     }
 }

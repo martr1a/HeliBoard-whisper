@@ -801,6 +801,11 @@ public class LatinIME extends InputMethodService implements
     public void onStartInputView(final EditorInfo editorInfo, final boolean restarting) {
         mHandler.onStartInputView(editorInfo, restarting);
         mStatsUtilsManager.onStartInputView();
+        if (WhisperVoice.INSTANCE.isEnabled()) {
+            final View root = whisperRoot();
+            if (root != null) root.post(() -> WhisperVoice.INSTANCE.showLanguage(this, root,
+                    mRichImm.getCurrentSubtypeLocale().getLanguage()));
+        }
     }
 
     @Override
@@ -1429,15 +1434,15 @@ public class LatinIME extends InputMethodService implements
 
     // This method is public for testability of LatinIME, but also in the future it should
     // completely replace #onCodeInput.
+    @Nullable private View whisperRoot() {
+        return getWindow().getWindow() == null ? null : getWindow().getWindow().getDecorView();
+    }
+
     public void onEvent(@NonNull final Event event) {
         if (WhisperVoice.INSTANCE.isEnabled() && (KeyCode.VOICE_INPUT == event.getKeyCode()
-                || WhisperVoice.CODE_OTHER_LANGUAGE == event.getKeyCode())) {
-            final String lang = mRichImm.getCurrentSubtypeLocale().getLanguage();
-            final String otherPref = WhisperVoice.INSTANCE.otherLanguage(this);
-            final String other = lang.equals(otherPref) ? null : otherPref;
-            WhisperVoice.INSTANCE.onMicKey(this,
-                    KeyCode.VOICE_INPUT == event.getKeyCode() ? lang : other,
-                    getWindow().getWindow() == null ? null : getWindow().getWindow().getDecorView(),
+                || WhisperVoice.CODE_NEXT_LANGUAGE == event.getKeyCode())) {
+            WhisperVoice.INSTANCE.onKey(this, event.getKeyCode(),
+                    mRichImm.getCurrentSubtypeLocale().getLanguage(), whisperRoot(),
                     text -> { onTextInput(text); return kotlin.Unit.INSTANCE; });
             return;
         }

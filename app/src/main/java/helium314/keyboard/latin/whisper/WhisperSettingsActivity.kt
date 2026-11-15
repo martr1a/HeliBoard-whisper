@@ -16,7 +16,7 @@ import helium314.keyboard.latin.BuildConfig
 /** Settings of the Whisper mic key. Changes apply to the next recording. */
 class WhisperSettingsActivity : Activity() {
     private lateinit var url: EditText
-    private lateinit var otherLang: EditText
+    private lateinit var languages: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,14 +62,16 @@ class WhisperSettingsActivity : Activity() {
         col.addView(label("Nii kaua vaikust pärast rääkimist, siis saadetakse heli automaatselt. " +
                 "Mikrofoni uuesti vajutades saadetakse kohe.", 13f))
 
-        col.addView(label("Pikk vajutus: keel (nt en, et; tühi = automaatne)"))
-        otherLang = EditText(this).apply {
-            setText(prefs.getString(WhisperVoice.KEY_OTHER_LANG, WhisperVoice.DEFAULT_OTHER_LANG))
+        col.addView(label("Keeled"))
+        languages = EditText(this).apply {
+            setText(prefs.getString(WhisperVoice.KEY_LANGS, WhisperVoice.DEFAULT_LANGS))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             isSingleLine = true
         }
-        col.addView(otherLang)
-        col.addView(label("Lühike vajutus kasutab klaviatuuri paigutuse keelt.", 13f))
+        col.addView(languages)
+        col.addView(label("Komadega eraldatud, nt „auto, et, en“. Mikrofoni pikk vajutus vahetab keelt, valitud keel " +
+                "on kirjas mikrofoni nupul. „auto“ = Whisper tuvastab keele ise, nupul siis silti pole. " +
+                "Tühi = klaviatuuri paigutuse keel.", 13f))
 
         col.addView(label("Serveri aadress"))
         url = EditText(this).apply {
@@ -97,7 +99,7 @@ class WhisperSettingsActivity : Activity() {
         super.onPause()
         WhisperVoice.prefs(this).edit()
             .putString(WhisperVoice.KEY_URL, url.text.toString().trim())
-            .putString(WhisperVoice.KEY_OTHER_LANG, otherLang.text.toString().trim().lowercase())
+            .putString(WhisperVoice.KEY_LANGS, languages.text.toString().trim().lowercase())
             .apply()
     }
 
