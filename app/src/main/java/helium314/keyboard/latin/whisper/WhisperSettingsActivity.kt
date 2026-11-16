@@ -19,6 +19,8 @@ import helium314.keyboard.latin.BuildConfig
 class WhisperSettingsActivity : Activity() {
     private lateinit var url: EditText
     private lateinit var languages: EditText
+    private lateinit var apiKey: EditText
+    private lateinit var model: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -112,6 +114,26 @@ class WhisperSettingsActivity : Activity() {
         col.addView(label("OpenAI-ühilduv aadress, nt https://server/v1/audio/transcriptions." +
                 if (BuildConfig.WHISPER_URL.isEmpty()) " Ilma selleta mikrofon ei tööta." else " Tühi = ${BuildConfig.WHISPER_URL}", 13f))
 
+        col.addView(label("API võti"))
+        apiKey = EditText(this).apply {
+            setText(prefs.getString(WhisperVoice.KEY_API_KEY, ""))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        col.addView(apiKey)
+        col.addView(label("Tasuliste teenuste (OpenAI, Groq jt) jaoks; saadetakse päises „Authorization: Bearer“. " +
+                "Oma serveri puhul jäta tühjaks.", 13f))
+
+        col.addView(label("Mudel"))
+        model = EditText(this).apply {
+            setText(prefs.getString(WhisperVoice.KEY_MODEL, ""))
+            hint = BuildConfig.WHISPER_MODEL
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isSingleLine = true
+        }
+        col.addView(model)
+        col.addView(label("Tühi = ${BuildConfig.WHISPER_MODEL}. Näiteks Groq: whisper-large-v3-turbo.", 13f))
+
         val scroll = ScrollView(this).apply {
             addView(col, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
@@ -142,6 +164,8 @@ class WhisperSettingsActivity : Activity() {
         WhisperVoice.prefs(this).edit()
             .putString(WhisperVoice.KEY_URL, url.text.toString().trim())
             .putString(WhisperVoice.KEY_LANGS, languages.text.toString().trim().lowercase())
+            .putString(WhisperVoice.KEY_API_KEY, apiKey.text.toString().trim())
+            .putString(WhisperVoice.KEY_MODEL, model.text.toString().trim())
             .apply()
     }
 

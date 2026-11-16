@@ -19,14 +19,14 @@ another voice keyboard. Switching keyboards loses the text field in some apps
   at the moment the text arrives, it goes to the clipboard and stays on the toolbar row
   (marked `↳`): tap it there to type it into the field that is active now.
 - Audio is sent as AAC/m4a (~0.25 MB per minute), WAV if encoding fails or compression is off.
-- Optional "Tekst osade kaupa" (live): audio is streamed to the server's `/ws/live-transcribe`
-; each utterance appears on the toolbar row next to the mic while you talk,
+- Optional "Tekst osade kaupa" (live): audio is streamed to the server's `/ws/live-transcribe`;
+  each utterance appears on the toolbar row next to the mic while you talk,
   the sentence being spoken updates about every second (server `partial_ms=1000`),
   and the server's clean text of the whole recording goes into the field at the end. If the live
   connection fails, the recording is uploaded the normal way.
 - First tap asks for the microphone permission.
 - Settings: **Whisper**, the first entry in the keyboard settings — pause before sending (default 3 s), language list,
-  server address. Changes apply to the next recording, no rebuild needed.
+  server address, API key and model (for hosted services; sent as `Authorization: Bearer`). Changes apply to the next recording, no rebuild needed.
 
 ## Build
 

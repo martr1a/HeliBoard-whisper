@@ -74,8 +74,14 @@ object WhisperVoice {
     const val DEFAULT_LANGS = "auto, et, en"
     const val KEY_LIVE = "live"
     const val KEY_COMPRESS = "compress"
+    const val KEY_API_KEY = "api_key"
+    const val KEY_MODEL = "model"
     fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
+
+    /** sent as "Authorization: Bearer …" when not empty (OpenAI, Groq and other hosted services) */
+    fun apiKey(context: Context) = prefs(context).getString(KEY_API_KEY, null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.WHISPER_KEY
+    fun model(context: Context) = prefs(context).getString(KEY_MODEL, null)?.trim()?.takeIf { it.isNotEmpty() } ?: BuildConfig.WHISPER_MODEL
 
     /** one line for the settings list: pause and languages */
     fun summary(context: Context): String {
@@ -197,9 +203,10 @@ object WhisperVoice {
         partialText = ""
         updateColor(context)
         val url = url(context)
+        val apiKey = apiKey(context)
         thread(name = "whisper-rec") {
             // live: stream to the server, pieces appear on the toolbar row while talking
-            val session = if (live) try { LiveSession(LiveSession.urlFor(url), language, { addPreview(it) }, { setPartial(it) }) }
+            val session = if (live) try { LiveSession(LiveSession.urlFor(url), language, apiKey, { addPreview(it) }, { setPartial(it) }) }
                 catch (e: Exception) { android.util.Log.w(TAG, "live session failed", e); null } else null
             liveSession = session
             try {
@@ -344,13 +351,15 @@ object WhisperVoice {
             var failed: String? = null
             try {
                 val url = url(context)
+                val apiKey = apiKey(context)
+                val model = model(context)
                 while (failed == null) {
                     val f = queuedFiles(context).firstOrNull() ?: break
                     val lang = f.name.split('_').getOrNull(1)?.substringBefore('.')?.takeIf { it != "auto" }
                     if (f.isPreview()) { // one try; the final text covers it anyway
                         // recording already finished: skip the preview, the final text matters now
                         if (queuedFiles(context).any { !it.isPreview() }) { f.delete(); continue }
-                        val t = try { transcribe(url, f, lang) } catch (e: Exception) { null }
+                        val t = try { transcribe(url, apiKey, model, f, lang) } catch (e: Exception) { null }
                         f.delete()
                         if (!t.isNullOrBlank()) addPreview(t.trim())
                         continue
@@ -358,7 +367,7 @@ object WhisperVoice {
                     var text: String? = null
                     for (wait in RETRY_WAIT_MS) {
                         if (wait > 0) Thread.sleep(wait)
-                        try { text = transcribe(url, f, lang); break }
+                        try { text = transcribe(url, apiKey, model, f, lang); break }
                         catch (e: Exception) { android.util.Log.w(TAG, "upload failed", e); failed = e.message ?: e.javaClass.simpleName }
                     }
                     if (text == null) break
@@ -478,12 +487,12 @@ object WhisperVoice {
         return h.array() + pcm
     }
 
-    private fun transcribe(url: String, audio: File, language: String?): String {
+    private fun transcribe(url: String, apiKey: String, model: String, audio: File, language: String?): String {
         val boundary = "----heliboard${System.nanoTime()}"
         val body = ByteArrayOutputStream()
         fun field(name: String, value: String) = body.write(
             "--$boundary\r\nContent-Disposition: form-data; name=\"$name\"\r\n\r\n$value\r\n".toByteArray())
-        field("model", BuildConfig.WHISPER_MODEL)
+        field("model", model)
         field("response_format", "json")
         if (!language.isNullOrEmpty()) field("language", language)
         val m4a = audio.name.endsWith(".m4a")
@@ -499,8 +508,7 @@ object WhisperVoice {
             conn.connectTimeout = 10_000
             conn.readTimeout = 120_000
             conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-            if (BuildConfig.WHISPER_KEY.isNotEmpty())
-                conn.setRequestProperty("Authorization", "Bearer ${BuildConfig.WHISPER_KEY}")
+            if (apiKey.isNotEmpty()) conn.setRequestProperty("Authorization", "Bearer $apiKey")
             conn.setFixedLengthStreamingMode(body.size())
             conn.outputStream.use { body.writeTo(it) }
             val code = conn.responseCode

@@ -1,7 +1,7 @@
 # HeliBoard Whisper
 
 A fork of [HeliBoard](https://github.com/HeliBorg/HeliBoard) with voice typing built into the keyboard.
-The mic key on the toolbar records your speech, sends it to **your own Whisper server** and types the
+The mic key on the toolbar records your speech, sends it to **a Whisper server you choose** and types the
 text into the field. The keyboard never switches to another voice keyboard, so the text field is not
 lost in apps where that happens ([HeliBoard #1772](https://github.com/HeliBorg/HeliBoard/issues/1772)).
 
@@ -16,8 +16,12 @@ separate app (`helium314.keyboard.whisper`).
 3. Tap the mic key on the toolbar. The first tap opens the Whisper settings: enter your server address,
    e.g. `https://your-server/v1/audio/transcriptions`. The second tap asks for the microphone permission.
 
-You need a server with an OpenAI-compatible `/v1/audio/transcriptions` endpoint (for example
-faster-whisper-server / speaches or whisper.cpp's server). No API key is sent.
+You need an OpenAI-compatible `/v1/audio/transcriptions` endpoint: your own server (for example
+speaches / faster-whisper-server or whisper.cpp's server), or a hosted service such as OpenAI
+(`https://api.openai.com/v1/audio/transcriptions`, model `whisper-1`) or Groq
+(`https://api.groq.com/openai/v1/audio/transcriptions`, model `whisper-large-v3-turbo`). For a hosted
+service enter its API key and model in the Whisper settings; the key is sent as `Authorization: Bearer`
+and is stored on the phone in the app's private settings.
 
 ## Use
 
@@ -32,7 +36,7 @@ faster-whisper-server / speaches or whisper.cpp's server). No API key is sent.
 - Optional live mode shows the text on the toolbar row while you talk. It needs a server with a
   `/ws/live-transcribe` WebSocket endpoint; leave it off otherwise.
 
-Settings (pause before sending, languages, server, live mode) are the first entry, **Whisper**, in the
+Settings (pause before sending, languages, server, API key, model, live mode) are the first entry, **Whisper**, in the
 keyboard settings. The settings screen is in Estonian for now.
 
 Details, build instructions and the list of changed upstream files: [WHISPER.md](WHISPER.md).

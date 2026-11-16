@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
  * clean text of the whole recording at the end ([finish]).
  */
 class LiveSession(
-    url: String, language: String?,
+    url: String, language: String?, apiKey: String,
     private val onSegment: (String) -> Unit,
     private val onPartial: (String) -> Unit,
 ) {
@@ -33,7 +33,9 @@ class LiveSession(
     init {
         val full = url + (if ('?' in url) "&" else "?") + "final=true&partial_ms=1000" +
                 (if (language != null) "&language=$language" else "")
-        ws = client.newWebSocket(Request.Builder().url(full).build(), object : WebSocketListener() {
+        val request = Request.Builder().url(full)
+        if (apiKey.isNotEmpty()) request.header("Authorization", "Bearer $apiKey")
+        ws = client.newWebSocket(request.build(), object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val m = try { JSONObject(text) } catch (_: Exception) { return }
                 when (m.optString("type")) {
