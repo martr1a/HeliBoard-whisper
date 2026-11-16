@@ -5,18 +5,11 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application>
-        <!-- own launcher icon "Whisper": pause, long-press language, server -->
+        <!-- opened from the "Whisper" entry at the top of the keyboard settings -->
         <activity android:name="helium314.keyboard.latin.whisper.WhisperSettingsActivity"
             android:label="Whisper"
-            android:icon="@mipmap/ic_launcher"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
             android:windowSoftInputMode="adjustResize"
-            android:taskAffinity="helium314.keyboard.whisper.settings"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false" />
     </application>
 </manifest>

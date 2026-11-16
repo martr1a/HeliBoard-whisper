@@ -67,6 +67,13 @@ object WhisperVoice {
     fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
 
+    /** one line for the settings list: pause and languages */
+    fun summary(context: Context): String {
+        val pause = prefs(context).getInt(KEY_SILENCE_MS, DEFAULT_SILENCE_MS) / 1000f
+        val langs = languages(context).joinToString(", ").ifEmpty { "klaviatuuri keel" }
+        return "Paus %.1f s · %s".format(pause, langs)
+    }
+
     /** voice languages in long-press order; "auto" = let Whisper detect */
     fun languages(context: Context): List<String> =
         prefs(context).getString(KEY_LANGS, DEFAULT_LANGS)!!.split(',', ' ', ';')

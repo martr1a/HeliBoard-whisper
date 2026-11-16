@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package helium314.keyboard.settings.screens
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -18,6 +19,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import helium314.keyboard.latin.R
 import helium314.keyboard.latin.utils.JniUtils
+import helium314.keyboard.latin.whisper.WhisperSettingsActivity
+import helium314.keyboard.latin.whisper.WhisperVoice
 import helium314.keyboard.latin.utils.SubtypeLocaleUtils.displayName
 import helium314.keyboard.latin.utils.SubtypeSettings
 import helium314.keyboard.latin.utils.NextScreenIcon
@@ -54,6 +57,15 @@ fun MainSettingsScreen(
             Column(
                 Modifier.verticalScroll(rememberScrollState()).then(Modifier.padding(innerPadding))
             ) {
+                if (WhisperVoice.isEnabled) {
+                    val ctx = LocalContext.current
+                    Preference(
+                        name = "Whisper",
+                        description = WhisperVoice.summary(ctx),
+                        onClick = { ctx.startActivity(Intent(ctx, WhisperSettingsActivity::class.java)) },
+                        icon = R.drawable.sym_keyboard_voice_rounded
+                    ) { NextScreenIcon() }
+                }
                 Preference(
                     name = stringResource(R.string.language_and_layouts_title),
                     description = enabledSubtypes.joinToString(", ") { it.displayName() },

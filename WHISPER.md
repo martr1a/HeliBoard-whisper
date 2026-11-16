@@ -17,7 +17,7 @@ another voice keyboard. Switching keyboards loses the text field in some apps
 - Audio is sent as AAC/m4a (~0.25 MB per minute), WAV if encoding fails or compression is off.
 - Optional "Tekst osade kaupa" (live): each piece is sent at a short pause while you talk.
 - First tap asks for the microphone permission.
-- Settings: launcher icon **Whisper** — pause before sending (default 3 s), language list,
+- Settings: **Whisper**, the first entry in the keyboard settings — pause before sending (default 3 s), language list,
   server address. Changes apply to the next recording, no rebuild needed.
 
 ## Build
