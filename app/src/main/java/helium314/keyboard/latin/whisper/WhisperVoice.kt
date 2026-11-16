@@ -97,7 +97,7 @@ object WhisperVoice {
     }
 
     /** Mic key: tap records in the selected language, long-press selects the next language. */
-    fun onKey(context: Context, code: Int, keyboardLang: String, root: View?, commit: (String) -> Unit) {
+    fun onKey(context: Context, code: Int, keyboardLang: String, root: View?, commit: (String) -> Boolean) {
         if (code == CODE_NEXT_LANGUAGE) {
             val langs = languages(context)
             if (langs.size > 1) {
@@ -129,14 +129,15 @@ object WhisperVoice {
 
     @Volatile private var recording = false
     @Volatile private var stopRequested = false
-    @Volatile private var cancelled = false
     @Volatile private var inputActive = true
     private val draining = AtomicBoolean(false)
     private val sender = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     // latest keyboard window and text sink; replaced on every key press
     @Volatile private var root: View? = null
-    @Volatile private var commit: ((String) -> Unit)? = null
+    @Volatile private var commit: ((String) -> Boolean)? = null
+    // text that arrived when no text field was active; shown on the toolbar row, tap inserts it
+    private var held: String? = null
 
     private const val LIVE_PAUSE_MS = 400
     private const val LIVE_MIN_MS = 1_500
@@ -164,7 +165,7 @@ object WhisperVoice {
      * Mic key pressed. [language] is an ISO code ("et", "en") or null for auto-detect.
      * Tap while recording: stop. Tap when sending failed: send the kept recording again.
      */
-    fun onMicKey(context: Context, language: String?, root: View?, commit: (String) -> Unit) {
+    fun onMicKey(context: Context, language: String?, root: View?, commit: (String) -> Boolean) {
         this.root = root
         this.commit = commit
         when (state(context)) {
@@ -183,8 +184,9 @@ object WhisperVoice {
         val live = p.getBoolean(KEY_LIVE, false)
         val compress = p.getBoolean(KEY_COMPRESS, true)
         stopRequested = false
-        cancelled = false
         recording = true
+        held = null // still on the clipboard
+        root?.let { hidePreview(it) }
         queuedFiles(context).filter { it.isPreview() }.forEach { it.delete() }
         previewText.setLength(0)
         partialText = ""
@@ -228,22 +230,22 @@ object WhisperVoice {
     }
 
     /** Keyboard opened: show language and state again (the toolbar views are new). */
-    fun onKeyboardShown(context: Context, root: View, keyboardLang: String) {
+    fun onKeyboardShown(context: Context, root: View, keyboardLang: String, commit: (String) -> Boolean) {
         inputActive = true
         this.root = root
+        this.commit = commit
         showLanguage(context, root, keyboardLang)
         updateColor(context)
+        showHeld()
     }
 
-    /** Keyboard closed: drop an unfinished recording, never send it. */
-    fun cancel() {
+    /**
+     * Keyboard closed or the text field went away (also when the screen locks): stop recording
+     * and transcribe what was said. The text is held (and put on the clipboard) until a field is active.
+     */
+    fun onKeyboardHidden() {
         inputActive = false
-        if (recording) {
-            cancelled = true
-            stopRequested = true
-            liveSession?.abort()
-        }
-        root?.let { hidePreview(it) }
+        if (recording) stopRequested = true
     }
 
     // ---- recording ---------------------------------------------------------------------
@@ -305,8 +307,7 @@ object WhisperVoice {
             android.util.Log.i(TAG, "recorded ${totalMs} ms, live ${if (session != null) "server" else live}, noise %.0f, threshold %.0f, max %.0f, speech $heardAny, stopped by tap $stopRequested".format(noise, threshold, maxRms))
         }
         // a tap always sends what was recorded; silence-stop sends only when speech was heard
-        val tapped = stopRequested && !cancelled
-        if (!cancelled && (heardAny || (tapped && totalMs >= 500))) segment(all.toByteArray(), true)
+        if (heardAny || (stopRequested && totalMs >= 500)) segment(all.toByteArray(), true)
     }
 
     /** Keep the piece as a file first, so a failed upload loses nothing. */
@@ -377,12 +378,29 @@ object WhisperVoice {
         main.post {
             root?.let { hidePreview(it) }
             val c = commit
-            if (inputActive && c != null) c(text)
-            else { // keyboard was closed meanwhile: do not lose the text
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("Whisper", text))
-                Toast.makeText(context, "Whisper: tekst on lõikelaual", Toast.LENGTH_LONG).show()
-            }
+            if (inputActive && c != null && c(text)) return@post
+            // no active text field: do not lose the text
+            val all = listOfNotNull(held, text).joinToString(" ")
+            held = all
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("Whisper", all))
+            Toast.makeText(context, "Whisper: tekstilahter ei ole aktiivne. Tekst on lõikelaual; klaviatuuri real puuduta seda, et lisada.", Toast.LENGTH_LONG).show()
+            showHeld()
+        }
+    }
+
+    /** Held text on the toolbar row; a tap types it into the field that is active now. */
+    private fun showHeld() {
+        val text = held ?: return
+        if (recording) return
+        root?.let { showPreview(it, "↳ $text") }
+    }
+
+    private fun onPreviewTap() {
+        val text = held ?: return
+        if (commit?.invoke(text) == true) {
+            held = null
+            root?.let { hidePreview(it) }
         }
     }
 
@@ -409,6 +427,7 @@ object WhisperVoice {
     }
 
     private fun refreshPreview() {
+        if (!recording && !finishing && !draining.get()) return // late piece after the text was delivered
         val text = listOf(previewText.toString(), partialText).filter { it.isNotEmpty() }.joinToString(" ")
         root?.let { showPreview(it, text) }
     }
@@ -429,6 +448,7 @@ object WhisperVoice {
                 wrapper.findViewById<View>(id)?.let { v -> hidden[v] = v.visibility; v.visibility = View.GONE }
             }
             wrapper.addView(this, at, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            setOnClickListener { onPreviewTap() }
             previewView = this
         }
         tv.text = text
@@ -490,7 +510,10 @@ object WhisperVoice {
     }
 
     private fun updateColor(context: Context) {
-        val color = when (state(context)) {
+        val state = state(context)
+        // the screen must not lock while talking or while the text is on its way
+        root?.keepScreenOn = state == State.RECORDING || state == State.SENDING
+        val color = when (state) {
             State.IDLE -> null
             State.RECORDING -> Color.rgb(0xE5, 0x39, 0x35) // red
             State.SENDING -> Color.rgb(0xFB, 0x8C, 0x00)   // orange

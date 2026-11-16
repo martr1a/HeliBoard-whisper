@@ -804,14 +804,14 @@ public class LatinIME extends InputMethodService implements
         if (WhisperVoice.INSTANCE.isEnabled()) {
             final View root = whisperRoot();
             if (root != null) root.post(() -> WhisperVoice.INSTANCE.onKeyboardShown(this, root,
-                    mRichImm.getCurrentSubtypeLocale().getLanguage()));
+                    mRichImm.getCurrentSubtypeLocale().getLanguage(), this::whisperCommit));
         }
     }
 
     @Override
     public void onFinishInputView(final boolean finishingInput) {
         StatsUtils.onFinishInputView();
-        WhisperVoice.INSTANCE.cancel();
+        WhisperVoice.INSTANCE.onKeyboardHidden();
         mHandler.onFinishInputView(finishingInput);
         mStatsUtilsManager.onFinishInputView();
         mGestureConsumer = GestureConsumer.NULL_GESTURE_CONSUMER;
@@ -1434,6 +1434,17 @@ public class LatinIME extends InputMethodService implements
 
     // This method is public for testability of LatinIME, but also in the future it should
     // completely replace #onCodeInput.
+    /** Types the Whisper text into the current field; false when there is no field to type into. */
+    private boolean whisperCommit(final String text) {
+        final EditorInfo ei = getCurrentInputEditorInfo();
+        if (!isInputViewShown() || getCurrentInputConnection() == null || ei == null
+                || ei.inputType == android.text.InputType.TYPE_NULL) return false;
+        // separate from the text before the cursor
+        final int before = mInputLogic.mConnection.getCodePointBeforeCursor();
+        onTextInput(before > 0 && !Character.isWhitespace(before) ? " " + text : text);
+        return true;
+    }
+
     @Nullable private View whisperRoot() {
         return getWindow().getWindow() == null ? null : getWindow().getWindow().getDecorView();
     }
@@ -1442,13 +1453,7 @@ public class LatinIME extends InputMethodService implements
         if (WhisperVoice.INSTANCE.isEnabled() && (KeyCode.VOICE_INPUT == event.getKeyCode()
                 || WhisperVoice.CODE_NEXT_LANGUAGE == event.getKeyCode())) {
             WhisperVoice.INSTANCE.onKey(this, event.getKeyCode(),
-                    mRichImm.getCurrentSubtypeLocale().getLanguage(), whisperRoot(),
-                    text -> {
-                        // separate from the text before the cursor
-                        final int before = mInputLogic.mConnection.getCodePointBeforeCursor();
-                        onTextInput(before > 0 && !Character.isWhitespace(before) ? " " + text : text);
-                        return kotlin.Unit.INSTANCE;
-                    });
+                    mRichImm.getCurrentSubtypeLocale().getLanguage(), whisperRoot(), this::whisperCommit);
             return;
         }
         if (KeyCode.VOICE_INPUT == event.getKeyCode()) {

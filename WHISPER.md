@@ -13,7 +13,11 @@ another voice keyboard. Switching keyboards loses the text field in some apps
   language is written on the mic key; `auto` (Whisper detects the language) shows no label.
 - Every recording is saved as a file before upload and deleted only when the text has arrived
   (3 tries). If the server does not answer, the mic turns purple: tap it to send again.
-  If the keyboard was closed meanwhile, the text goes to the clipboard.
+- The screen stays on while recording and while the text is on its way.
+- If the keyboard closes or the text field goes away while recording (also when the screen is
+  locked by hand), the recording is stopped and transcribed, not dropped. When no field is active
+  at the moment the text arrives, it goes to the clipboard and stays on the toolbar row
+  (marked `↳`): tap it there to type it into the field that is active now.
 - Audio is sent as AAC/m4a (~0.25 MB per minute), WAV if encoding fails or compression is off.
 - Optional "Tekst osade kaupa" (live): audio is streamed to the server's `/ws/live-transcribe`
 ; each utterance appears on the toolbar row next to the mic while you talk,
@@ -46,7 +50,7 @@ All Whisper code is in `app/src/main/java/helium314/keyboard/latin/whisper/` and
 `app/src/whisper/`. Upstream files touched (keep this list short, for rebases):
 
 - `LatinIME.java` — mic key goes to `WhisperVoice` when `BuildConfig.WHISPER_URL` is set;
-  recording is cancelled when the keyboard closes
+  recording is stopped and sent when the keyboard closes (`whisperCommit` reports whether a field took the text)
 - `ToolbarUtils.kt` — long-press of the mic key
 - `AndroidManifest.xml` — permission activity
 - `app/build.gradle.kts` — `whisper` build type, signing, BuildConfig fields
