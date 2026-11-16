@@ -1443,7 +1443,12 @@ public class LatinIME extends InputMethodService implements
                 || WhisperVoice.CODE_NEXT_LANGUAGE == event.getKeyCode())) {
             WhisperVoice.INSTANCE.onKey(this, event.getKeyCode(),
                     mRichImm.getCurrentSubtypeLocale().getLanguage(), whisperRoot(),
-                    text -> { onTextInput(text); return kotlin.Unit.INSTANCE; });
+                    text -> {
+                        // separate from the text before the cursor
+                        final int before = mInputLogic.mConnection.getCodePointBeforeCursor();
+                        onTextInput(before > 0 && !Character.isWhitespace(before) ? " " + text : text);
+                        return kotlin.Unit.INSTANCE;
+                    });
             return;
         }
         if (KeyCode.VOICE_INPUT == event.getKeyCode()) {

@@ -18,6 +18,14 @@ import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.text.TextUtils
+import android.util.TypedValue
+import android.view.Gravity
+import helium314.keyboard.latin.R
+import helium314.keyboard.latin.common.ColorType
+import helium314.keyboard.latin.settings.Settings
 import android.widget.Toast
 import helium314.keyboard.latin.BuildConfig
 import helium314.keyboard.latin.utils.Log
@@ -50,7 +58,9 @@ object WhisperVoice {
     private const val RATE = 16_000
     private const val NO_SPEECH_MS = 8_000
     private const val MAX_MS = 180_000
-    private const val SPEECH_RMS = 700.0
+    // speech = louder than SPEECH_FACTOR x the noise floor measured in the first 300 ms
+    private const val MIN_SPEECH_RMS = 120.0
+    private const val SPEECH_FACTOR = 2.5
 
     val isEnabled get() = BuildConfig.WHISPER_URL.isNotEmpty()
 
@@ -128,18 +138,24 @@ object WhisperVoice {
     @Volatile private var root: View? = null
     @Volatile private var commit: ((String) -> Unit)? = null
 
-    private const val LIVE_PAUSE_MS = 700
-    private const val LIVE_MIN_MS = 2_500
+    private const val LIVE_PAUSE_MS = 400
+    private const val LIVE_MIN_MS = 1_500
     private val RETRY_WAIT_MS = longArrayOf(0, 2_000, 5_000)
 
     private fun pendingDir(context: Context) = File(context.filesDir, "whisper_pending").apply { mkdirs() }
-    fun pendingFiles(context: Context): List<File> =
+    private fun queuedFiles(context: Context): List<File> =
         pendingDir(context).listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }?.sortedBy { it.name } ?: emptyList()
+    private fun File.isPreview() = name.substringBefore('.').endsWith("_p")
+    /** recordings whose text has not reached the field yet */
+    fun pendingFiles(context: Context): List<File> = queuedFiles(context).filter { !it.isPreview() }
     fun clearPending(context: Context) { pendingDir(context).listFiles()?.forEach { it.delete() } }
+
+    @Volatile private var finishing = false // waiting for the live final text
+    @Volatile private var liveSession: LiveSession? = null
 
     private fun state(context: Context) = when {
         recording -> State.RECORDING
-        draining.get() -> State.SENDING
+        finishing || draining.get() -> State.SENDING
         pendingFiles(context).isNotEmpty() -> State.FAILED
         else -> State.IDLE
     }
@@ -169,14 +185,41 @@ object WhisperVoice {
         stopRequested = false
         cancelled = false
         recording = true
+        queuedFiles(context).filter { it.isPreview() }.forEach { it.delete() }
+        previewText.setLength(0)
         updateColor(context)
+        val url = url(context)
         thread(name = "whisper-rec") {
+            // live: stream to the server, pieces appear on the toolbar row while talking
+            val session = if (live) try { LiveSession(LiveSession.urlFor(url), language) { addPreview(it) } }
+                catch (e: Exception) { android.util.Log.w(TAG, "live session failed", e); null } else null
+            liveSession = session
             try {
-                record(silenceMs, live) { pcm -> save(context, pcm, language, compress); startSending(context) }
+                record(silenceMs, live && session == null) { pcm, final ->
+                    if (!final) { save(context, pcm, language, compress, false); startSending(context); return@record }
+                    if (session != null) {
+                        finishing = true
+                        recording = false
+                        main.post { updateColor(context) }
+                        val text = session.finish(60_000)
+                        finishing = false
+                        if (text != null) {
+                            android.util.Log.i(TAG, "live final: ${text.length} chars")
+                            deliver(context, text)
+                            return@record
+                        }
+                        android.util.Log.w(TAG, "live failed (${session.failed}), uploading the recording")
+                    }
+                    save(context, pcm, language, compress, true)
+                    startSending(context)
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "recording failed", e)
+                android.util.Log.w(TAG, "recording failed", e)
                 toast(context, "Whisper: ${e.message}")
             } finally {
+                session?.abort() // no-op after finish; closes it when nothing was said
+                liveSession = null
+                finishing = false
                 recording = false
                 main.post { updateColor(context) }
             }
@@ -197,18 +240,22 @@ object WhisperVoice {
         if (recording) {
             cancelled = true
             stopRequested = true
+            liveSession?.abort()
         }
+        root?.let { hidePreview(it) }
     }
 
     // ---- recording ---------------------------------------------------------------------
 
-    /** Records until silence/tap; [segment] gets each finished piece (live: every pause). */
+    /** Records until silence/tap. Live: [segment] gets a preview piece at every pause; always the whole recording at the end. */
     @SuppressLint("MissingPermission") // checked in onMicKey
-    private fun record(silenceMs: Int, live: Boolean, segment: (ByteArray) -> Unit) {
+    private fun record(silenceMs: Int, live: Boolean, segment: (ByteArray, Boolean) -> Unit) {
+        val session = liveSession
         val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, RATE))
         var out = ByteArrayOutputStream()
+        val all = ByteArrayOutputStream()
         val buf = ShortArray(RATE / 10) // 100 ms
         val bytes = ByteBuffer.allocate(buf.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         var heardAny = false
@@ -216,6 +263,9 @@ object WhisperVoice {
         var segMs = 0
         var quietMs = 0
         var totalMs = 0
+        var noise = 0.0
+        var maxRms = 0.0
+        var threshold = Double.MAX_VALUE
         rec.startRecording()
         try {
             while (!stopRequested && totalMs < MAX_MS) {
@@ -225,14 +275,24 @@ object WhisperVoice {
                 var sum = 0.0
                 for (i in 0 until n) { bytes.putShort(buf[i]); sum += buf[i].toDouble() * buf[i] }
                 out.write(bytes.array(), 0, n * 2)
+                all.write(bytes.array(), 0, n * 2)
+                session?.send(buf, n)
                 val ms = n * 1000 / RATE
                 totalMs += ms
                 segMs += ms
-                if (sqrt(sum / n) > SPEECH_RMS) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
+                val rms = sqrt(sum / n)
+                maxRms = maxOf(maxRms, rms)
+                if (totalMs <= 300) { // noise floor; the user rarely starts talking this fast
+                    noise = maxOf(noise, rms)
+                    threshold = maxOf(MIN_SPEECH_RMS, noise * SPEECH_FACTOR)
+                    continue
+                }
+                if (rms > threshold) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
                 if (heardAny && quietMs >= silenceMs) break
-                if (!heardAny && totalMs >= NO_SPEECH_MS) return
+                if (!heardAny && totalMs >= NO_SPEECH_MS) break
                 if (live && segSpeech && segMs >= LIVE_MIN_MS && quietMs >= LIVE_PAUSE_MS) {
-                    segment(out.toByteArray())
+                    android.util.Log.i(TAG, "live piece at $totalMs ms ($segMs ms)")
+                    segment(out.toByteArray(), false)
                     out = ByteArrayOutputStream()
                     segSpeech = false
                     segMs = 0
@@ -241,13 +301,16 @@ object WhisperVoice {
         } finally {
             rec.stop()
             rec.release()
+            android.util.Log.i(TAG, "recorded ${totalMs} ms, live ${if (session != null) "server" else live}, noise %.0f, threshold %.0f, max %.0f, speech $heardAny, stopped by tap $stopRequested".format(noise, threshold, maxRms))
         }
-        if (!cancelled && (segSpeech || (stopRequested && !live && heardAny))) segment(out.toByteArray())
+        // a tap always sends what was recorded; silence-stop sends only when speech was heard
+        val tapped = stopRequested && !cancelled
+        if (!cancelled && (heardAny || (tapped && totalMs >= 500))) segment(all.toByteArray(), true)
     }
 
     /** Keep the piece as a file first, so a failed upload loses nothing. */
-    private fun save(context: Context, pcm: ByteArray, language: String?, compress: Boolean) {
-        val base = "${System.currentTimeMillis()}_${language ?: "auto"}"
+    private fun save(context: Context, pcm: ByteArray, language: String?, compress: Boolean, final: Boolean) {
+        val base = "${System.currentTimeMillis()}_${language ?: "auto"}_${if (final) "f" else "p"}"
         val dir = pendingDir(context)
         if (compress) {
             val tmp = File(dir, "$base.m4a.part")
@@ -275,16 +338,25 @@ object WhisperVoice {
             try {
                 val url = url(context)
                 while (failed == null) {
-                    val f = pendingFiles(context).firstOrNull() ?: break
-                    val lang = f.name.substringAfter('_').substringBefore('.').takeIf { it != "auto" }
+                    val f = queuedFiles(context).firstOrNull() ?: break
+                    val lang = f.name.split('_').getOrNull(1)?.substringBefore('.')?.takeIf { it != "auto" }
+                    if (f.isPreview()) { // one try; the final text covers it anyway
+                        // recording already finished: skip the preview, the final text matters now
+                        if (queuedFiles(context).any { !it.isPreview() }) { f.delete(); continue }
+                        val t = try { transcribe(url, f, lang) } catch (e: Exception) { null }
+                        f.delete()
+                        if (!t.isNullOrBlank()) addPreview(t.trim())
+                        continue
+                    }
                     var text: String? = null
                     for (wait in RETRY_WAIT_MS) {
                         if (wait > 0) Thread.sleep(wait)
                         try { text = transcribe(url, f, lang); break }
-                        catch (e: Exception) { Log.w(TAG, "upload failed", e); failed = e.message ?: e.javaClass.simpleName }
+                        catch (e: Exception) { android.util.Log.w(TAG, "upload failed", e); failed = e.message ?: e.javaClass.simpleName }
                     }
                     if (text == null) break
                     failed = null
+                    android.util.Log.i(TAG, "sent ${f.name} (${f.length() / 1024} KB): ${text.length} chars")
                     f.delete()
                     deliver(context, text.trim())
                 }
@@ -292,8 +364,9 @@ object WhisperVoice {
                 draining.set(false)
                 main.post { updateColor(context) }
                 // a live piece may have been saved while the last upload finished
-                if (failed == null && pendingFiles(context).isNotEmpty()) startSending(context)
+                if (failed == null && queuedFiles(context).isNotEmpty()) startSending(context)
             }
+            if (failed != null) main.post { root?.let { hidePreview(it) } }
             failed?.let { toast(context, "Whisper: saatmine ebaõnnestus ($it). Salvestus on alles – vajuta mikrofoni uuesti.") }
         }
     }
@@ -301,6 +374,7 @@ object WhisperVoice {
     private fun deliver(context: Context, text: String) {
         if (text.isEmpty()) return
         main.post {
+            root?.let { hidePreview(it) }
             val c = commit
             if (inputActive && c != null) c(text)
             else { // keyboard was closed meanwhile: do not lose the text
@@ -309,6 +383,46 @@ object WhisperVoice {
                 Toast.makeText(context, "Whisper: tekst on lõikelaual", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    // ---- live preview on the toolbar row ------------------------------------------------
+
+    private val previewText = StringBuilder()
+    private var previewView: TextView? = null
+    private val hidden = mutableMapOf<View, Int>()
+
+    private fun addPreview(piece: String) = main.post {
+        if (previewText.isNotEmpty()) previewText.append(' ')
+        previewText.append(piece)
+        root?.let { showPreview(it, previewText.toString()) }
+    }
+
+    private fun showPreview(root: View, text: String) {
+        val wrapper = root.findViewById<LinearLayout>(R.id.suggestions_strip_wrapper) ?: return
+        val tv = previewView?.takeIf { it.parent === wrapper } ?: TextView(root.context).apply {
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.START // newest words stay visible
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            val pad = (8 * resources.displayMetrics.density).toInt()
+            setPadding(pad, 0, pad, 0)
+            setTextColor(try { Settings.getValues().mColors.get(ColorType.KEY_TEXT) } catch (_: Exception) { Color.WHITE })
+            val pinned = wrapper.findViewById<View>(R.id.pinned_keys)
+            val at = wrapper.indexOfChild(pinned).let { if (it < 0) wrapper.childCount else it }
+            for (id in intArrayOf(R.id.suggestions_strip, R.id.toolbar_container)) {
+                wrapper.findViewById<View>(id)?.let { v -> hidden[v] = v.visibility; v.visibility = View.GONE }
+            }
+            wrapper.addView(this, at, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            previewView = this
+        }
+        tv.text = text
+    }
+
+    private fun hidePreview(root: View) {
+        previewView?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        previewView = null
+        hidden.forEach { (v, vis) -> v.visibility = vis }
+        hidden.clear()
     }
 
     private fun toast(context: Context, msg: String) =

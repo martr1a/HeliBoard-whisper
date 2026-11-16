@@ -140,6 +140,7 @@ android {
 
 dependencies {
     // androidx
+    implementation("com.squareup.okhttp3:okhttp:4.12.0") // Whisper live transcription (WebSocket)
     implementation("androidx.core:core-ktx:1.17.0") // 1.18.0 requires minSdk 23
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("androidx.autofill:autofill:1.3.0")
