@@ -11,6 +11,11 @@ another voice keyboard. Switching keyboards loses the text field in some apps
   sent (mic turns orange) and the text is typed into the field.
 - Long-press mic: switch to the next voice language (default list `auto, et, en`). The selected
   language is written on the mic key; `auto` (Whisper detects the language) shows no label.
+- Every recording is saved as a file before upload and deleted only when the text has arrived
+  (3 tries). If the server does not answer, the mic turns purple: tap it to send again.
+  If the keyboard was closed meanwhile, the text goes to the clipboard.
+- Audio is sent as AAC/m4a (~0.25 MB per minute), WAV if encoding fails or compression is off.
+- Optional "Tekst osade kaupa" (live): each piece is sent at a short pause while you talk.
 - First tap asks for the microphone permission.
 - Settings: launcher icon **Whisper** — pause before sending (default 3 s), language list,
   server address. Changes apply to the next recording, no rebuild needed.

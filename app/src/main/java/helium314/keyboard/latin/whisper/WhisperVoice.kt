@@ -3,6 +3,8 @@ package helium314.keyboard.latin.whisper
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,18 +24,22 @@ import helium314.keyboard.latin.utils.Log
 import helium314.keyboard.latin.utils.ToolbarKey
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
 
 /**
  * Voice input without switching keyboards: the mic key records here and sends the
  * audio to an OpenAI-compatible Whisper endpoint (BuildConfig.WHISPER_URL).
- * Tap mic: start; tap again or stay silent: stop and transcribe.
+ * Tap mic: start; tap again or stay silent: stop and transcribe. Each recording is saved as a
+ * file before upload and deleted only after the text arrived, so a server outage loses nothing.
  * Switching to another voice IME loses the text field in some apps (HeliBoard #1772).
  */
 object WhisperVoice {
@@ -46,13 +52,6 @@ object WhisperVoice {
     private const val MAX_MS = 180_000
     private const val SPEECH_RMS = 700.0
 
-    private enum class State { IDLE, RECORDING, SENDING }
-
-    @Volatile private var state = State.IDLE
-    @Volatile private var stopRequested = false
-    @Volatile private var cancelled = false
-    private val main = Handler(Looper.getMainLooper())
-
     val isEnabled get() = BuildConfig.WHISPER_URL.isNotEmpty()
 
     // user settings, changed in WhisperSettingsActivity
@@ -63,6 +62,8 @@ object WhisperVoice {
     const val KEY_LANG_INDEX = "language_index"
     const val DEFAULT_SILENCE_MS = 3_000
     const val DEFAULT_LANGS = "auto, et, en"
+    const val KEY_LIVE = "live"
+    const val KEY_COMPRESS = "compress"
     fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
 
@@ -105,15 +106,48 @@ object WhisperVoice {
         }
     }
 
+    // ---- state -------------------------------------------------------------------------
+
+    private enum class State { IDLE, RECORDING, SENDING, FAILED }
+
+    @Volatile private var recording = false
+    @Volatile private var stopRequested = false
+    @Volatile private var cancelled = false
+    @Volatile private var inputActive = true
+    private val draining = AtomicBoolean(false)
+    private val sender = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
+    // latest keyboard window and text sink; replaced on every key press
+    @Volatile private var root: View? = null
+    @Volatile private var commit: ((String) -> Unit)? = null
+
+    private const val LIVE_PAUSE_MS = 700
+    private const val LIVE_MIN_MS = 2_500
+    private val RETRY_WAIT_MS = longArrayOf(0, 2_000, 5_000)
+
+    private fun pendingDir(context: Context) = File(context.filesDir, "whisper_pending").apply { mkdirs() }
+    fun pendingFiles(context: Context): List<File> =
+        pendingDir(context).listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }?.sortedBy { it.name } ?: emptyList()
+    fun clearPending(context: Context) { pendingDir(context).listFiles()?.forEach { it.delete() } }
+
+    private fun state(context: Context) = when {
+        recording -> State.RECORDING
+        draining.get() -> State.SENDING
+        pendingFiles(context).isNotEmpty() -> State.FAILED
+        else -> State.IDLE
+    }
+
     /**
      * Mic key pressed. [language] is an ISO code ("et", "en") or null for auto-detect.
-     * [root] is the keyboard window, used to colour the mic key.
-     * [commit] inserts the transcript; called on the main thread.
+     * Tap while recording: stop. Tap when sending failed: send the kept recording again.
      */
     fun onMicKey(context: Context, language: String?, root: View?, commit: (String) -> Unit) {
-        when (state) {
+        this.root = root
+        this.commit = commit
+        when (state(context)) {
             State.RECORDING -> { stopRequested = true; return }
             State.SENDING -> return
+            State.FAILED -> { startSending(context); return }
             State.IDLE -> {}
         }
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -121,48 +155,58 @@ object WhisperVoice {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return
         }
+        val p = prefs(context)
+        val silenceMs = p.getInt(KEY_SILENCE_MS, DEFAULT_SILENCE_MS)
+        val live = p.getBoolean(KEY_LIVE, false)
+        val compress = p.getBoolean(KEY_COMPRESS, true)
         stopRequested = false
         cancelled = false
-        val silenceMs = prefs(context).getInt(KEY_SILENCE_MS, DEFAULT_SILENCE_MS)
-        val url = url(context)
-        setState(State.RECORDING, root)
-        thread(name = "whisper") {
-            val text = try {
-                val pcm = record(silenceMs)
-                if (pcm == null || cancelled) null
-                else {
-                    main.post { setState(State.SENDING, root) }
-                    transcribe(url, wav(pcm), language)
-                }
+        recording = true
+        updateColor(context)
+        thread(name = "whisper-rec") {
+            try {
+                record(silenceMs, live) { pcm -> save(context, pcm, language, compress); startSending(context) }
             } catch (e: Exception) {
-                Log.w(TAG, "voice input failed", e)
-                main.post { Toast.makeText(context, "Whisper: ${e.message}", Toast.LENGTH_LONG).show() }
-                null
-            }
-            main.post {
-                setState(State.IDLE, root)
-                if (!text.isNullOrBlank() && !cancelled) commit(text.trim())
+                Log.w(TAG, "recording failed", e)
+                toast(context, "Whisper: ${e.message}")
+            } finally {
+                recording = false
+                main.post { updateColor(context) }
             }
         }
     }
 
+    /** Keyboard opened: show language and state again (the toolbar views are new). */
+    fun onKeyboardShown(context: Context, root: View, keyboardLang: String) {
+        inputActive = true
+        this.root = root
+        showLanguage(context, root, keyboardLang)
+        updateColor(context)
+    }
+
     /** Keyboard closed: drop an unfinished recording, never send it. */
     fun cancel() {
-        if (state == State.RECORDING) {
+        inputActive = false
+        if (recording) {
             cancelled = true
             stopRequested = true
         }
     }
 
+    // ---- recording ---------------------------------------------------------------------
+
+    /** Records until silence/tap; [segment] gets each finished piece (live: every pause). */
     @SuppressLint("MissingPermission") // checked in onMicKey
-    private fun record(silenceMs: Int): ByteArray? {
+    private fun record(silenceMs: Int, live: Boolean, segment: (ByteArray) -> Unit) {
         val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, RATE))
-        val out = ByteArrayOutputStream()
+        var out = ByteArrayOutputStream()
         val buf = ShortArray(RATE / 10) // 100 ms
         val bytes = ByteBuffer.allocate(buf.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-        var heardSpeech = false
+        var heardAny = false
+        var segSpeech = false
+        var segMs = 0
         var quietMs = 0
         var totalMs = 0
         rec.startRecording()
@@ -176,16 +220,92 @@ object WhisperVoice {
                 out.write(bytes.array(), 0, n * 2)
                 val ms = n * 1000 / RATE
                 totalMs += ms
-                if (sqrt(sum / n) > SPEECH_RMS) { heardSpeech = true; quietMs = 0 } else quietMs += ms
-                if (heardSpeech && quietMs >= silenceMs) break
-                if (!heardSpeech && totalMs >= NO_SPEECH_MS) return null
+                segMs += ms
+                if (sqrt(sum / n) > SPEECH_RMS) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
+                if (heardAny && quietMs >= silenceMs) break
+                if (!heardAny && totalMs >= NO_SPEECH_MS) return
+                if (live && segSpeech && segMs >= LIVE_MIN_MS && quietMs >= LIVE_PAUSE_MS) {
+                    segment(out.toByteArray())
+                    out = ByteArrayOutputStream()
+                    segSpeech = false
+                    segMs = 0
+                }
             }
         } finally {
             rec.stop()
             rec.release()
         }
-        return if (heardSpeech || stopRequested) out.toByteArray() else null
+        if (!cancelled && (segSpeech || (stopRequested && !live && heardAny))) segment(out.toByteArray())
     }
+
+    /** Keep the piece as a file first, so a failed upload loses nothing. */
+    private fun save(context: Context, pcm: ByteArray, language: String?, compress: Boolean) {
+        val base = "${System.currentTimeMillis()}_${language ?: "auto"}"
+        val dir = pendingDir(context)
+        if (compress) {
+            val tmp = File(dir, "$base.m4a.part")
+            try {
+                AacEncoder.encode(pcm, RATE, tmp)
+                tmp.renameTo(File(dir, "$base.m4a"))
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "AAC encoding failed, sending WAV", e)
+                tmp.delete()
+            }
+        }
+        val tmp = File(dir, "$base.wav.part")
+        tmp.writeBytes(wav(pcm))
+        tmp.renameTo(File(dir, "$base.wav"))
+    }
+
+    // ---- sending -----------------------------------------------------------------------
+
+    private fun startSending(context: Context) {
+        if (!draining.compareAndSet(false, true)) return
+        main.post { updateColor(context) }
+        sender.execute {
+            var failed: String? = null
+            try {
+                val url = url(context)
+                while (failed == null) {
+                    val f = pendingFiles(context).firstOrNull() ?: break
+                    val lang = f.name.substringAfter('_').substringBefore('.').takeIf { it != "auto" }
+                    var text: String? = null
+                    for (wait in RETRY_WAIT_MS) {
+                        if (wait > 0) Thread.sleep(wait)
+                        try { text = transcribe(url, f, lang); break }
+                        catch (e: Exception) { Log.w(TAG, "upload failed", e); failed = e.message ?: e.javaClass.simpleName }
+                    }
+                    if (text == null) break
+                    failed = null
+                    f.delete()
+                    deliver(context, text.trim())
+                }
+            } finally {
+                draining.set(false)
+                main.post { updateColor(context) }
+                // a live piece may have been saved while the last upload finished
+                if (failed == null && pendingFiles(context).isNotEmpty()) startSending(context)
+            }
+            failed?.let { toast(context, "Whisper: saatmine ebaõnnestus ($it). Salvestus on alles – vajuta mikrofoni uuesti.") }
+        }
+    }
+
+    private fun deliver(context: Context, text: String) {
+        if (text.isEmpty()) return
+        main.post {
+            val c = commit
+            if (inputActive && c != null) c(text)
+            else { // keyboard was closed meanwhile: do not lose the text
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Whisper", text))
+                Toast.makeText(context, "Whisper: tekst on lõikelaual", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun toast(context: Context, msg: String) =
+        main.post { Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
 
     private fun wav(pcm: ByteArray): ByteArray {
         val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
@@ -196,7 +316,7 @@ object WhisperVoice {
         return h.array() + pcm
     }
 
-    private fun transcribe(url: String, wav: ByteArray, language: String?): String {
+    private fun transcribe(url: String, audio: File, language: String?): String {
         val boundary = "----heliboard${System.nanoTime()}"
         val body = ByteArrayOutputStream()
         fun field(name: String, value: String) = body.write(
@@ -204,9 +324,10 @@ object WhisperVoice {
         field("model", BuildConfig.WHISPER_MODEL)
         field("response_format", "json")
         if (!language.isNullOrEmpty()) field("language", language)
-        body.write(("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n" +
-                "Content-Type: audio/wav\r\n\r\n").toByteArray())
-        body.write(wav)
+        val m4a = audio.name.endsWith(".m4a")
+        body.write(("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.${if (m4a) "m4a" else "wav"}\"\r\n" +
+                "Content-Type: ${if (m4a) "audio/mp4" else "audio/wav"}\r\n\r\n").toByteArray())
+        body.write(audio.readBytes())
         body.write("\r\n--$boundary--\r\n".toByteArray())
 
         val conn = URL(url).openConnection() as HttpURLConnection
@@ -231,12 +352,12 @@ object WhisperVoice {
         }
     }
 
-    private fun setState(s: State, root: View?) {
-        state = s
-        val color = when (s) {
+    private fun updateColor(context: Context) {
+        val color = when (state(context)) {
             State.IDLE -> null
-            State.RECORDING -> Color.rgb(0xE5, 0x39, 0x35)
-            State.SENDING -> Color.rgb(0xFB, 0x8C, 0x00)
+            State.RECORDING -> Color.rgb(0xE5, 0x39, 0x35) // red
+            State.SENDING -> Color.rgb(0xFB, 0x8C, 0x00)   // orange
+            State.FAILED -> Color.rgb(0xAB, 0x47, 0xBC)    // purple: kept, tap to resend
         }
         root?.let { tintMicKeys(it, color) }
     }

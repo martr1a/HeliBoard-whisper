@@ -6,10 +6,12 @@ import android.os.Bundle
 import android.text.InputType
 import android.util.TypedValue
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import helium314.keyboard.latin.BuildConfig
 
@@ -62,6 +64,33 @@ class WhisperSettingsActivity : Activity() {
         col.addView(label("Nii kaua vaikust pärast rääkimist, siis saadetakse heli automaatselt. " +
                 "Mikrofoni uuesti vajutades saadetakse kohe.", 13f))
 
+        fun switch(text: String, key: String, default: Boolean, help: String) {
+            col.addView(Switch(this).apply {
+                this.text = text
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setPadding(0, dp(18), 0, dp(4))
+                isChecked = prefs.getBoolean(key, default)
+                setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean(key, on).apply() }
+            })
+            col.addView(label(help, 13f))
+        }
+        switch("Tekst osade kaupa", WhisperVoice.KEY_LIVE, false,
+            "Iga lühikese pausi järel saadetakse valmis osa kohe ära ja tekst ilmub rääkimise ajal. " +
+                    "Salvestus lõpeb ikka ülal valitud pausiga või mikrofoni vajutusega.")
+        switch("Pakitud heli", WhisperVoice.KEY_COMPRESS, true,
+            "Saadab AAC-faili (umbes 0,25 MB minutis) WAV-i (2 MB minutis) asemel.")
+
+        // recordings that could not be sent yet
+        pending = label("", 16f)
+        val clear = Button(this).apply {
+            text = "Kustuta ootel salvestused"
+            setOnClickListener { WhisperVoice.clearPending(this@WhisperSettingsActivity); showPending() }
+        }
+        col.addView(pending)
+        col.addView(clear)
+        col.addView(label("Kui server ei vasta, jääb salvestus alles ja mikrofon on lilla. " +
+                "Mikrofoni vajutus saadab selle uuesti.", 13f))
+
         col.addView(label("Keeled"))
         languages = EditText(this).apply {
             setText(prefs.getString(WhisperVoice.KEY_LANGS, WhisperVoice.DEFAULT_LANGS))
@@ -93,6 +122,18 @@ class WhisperSettingsActivity : Activity() {
             insets
         }
         setContentView(scroll)
+    }
+
+    private lateinit var pending: TextView
+
+    private fun showPending() {
+        val n = WhisperVoice.pendingFiles(this).size
+        pending.text = if (n == 0) "Ootel salvestusi pole" else "Ootel salvestusi: $n"
+    }
+
+    override fun onResume() {
+        super.onResume()
+        showPending()
     }
 
     override fun onPause() {

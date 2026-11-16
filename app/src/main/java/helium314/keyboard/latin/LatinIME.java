@@ -803,7 +803,7 @@ public class LatinIME extends InputMethodService implements
         mStatsUtilsManager.onStartInputView();
         if (WhisperVoice.INSTANCE.isEnabled()) {
             final View root = whisperRoot();
-            if (root != null) root.post(() -> WhisperVoice.INSTANCE.showLanguage(this, root,
+            if (root != null) root.post(() -> WhisperVoice.INSTANCE.onKeyboardShown(this, root,
                     mRichImm.getCurrentSubtypeLocale().getLanguage()));
         }
     }
