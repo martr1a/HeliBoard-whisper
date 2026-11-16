@@ -109,7 +109,8 @@ class WhisperSettingsActivity : Activity() {
             isSingleLine = true
         }
         col.addView(url)
-        col.addView(label("OpenAI-ühilduv /v1/audio/transcriptions. Tühi = ${BuildConfig.WHISPER_URL}", 13f))
+        col.addView(label("OpenAI-ühilduv aadress, nt https://server/v1/audio/transcriptions." +
+                if (BuildConfig.WHISPER_URL.isEmpty()) " Ilma selleta mikrofon ei tööta." else " Tühi = ${BuildConfig.WHISPER_URL}", 13f))
 
         val scroll = ScrollView(this).apply {
             addView(col, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))

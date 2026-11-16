@@ -20,7 +20,8 @@ android {
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
         }
         proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-        // Whisper voice input is off unless a build type sets WHISPER_URL
+        // Whisper voice input is off unless a build type sets WHISPER
+        buildConfigField("boolean", "WHISPER", "false")
         buildConfigField("String", "WHISPER_URL", "\"\"")
         buildConfigField("String", "WHISPER_MODEL", "\"whisper-1\"")
         buildConfigField("String", "WHISPER_KEY", "\"\"")
@@ -50,7 +51,9 @@ android {
             versionNameSuffix = "-whisper"
             signingConfig = signingConfigs.getByName("whisper")
             matchingFallbacks += listOf("release")
-            buildConfigField("String", "WHISPER_URL", "\"" + (System.getenv("WHISPER_URL") ?: "https://whisper.example.org/v1/audio/transcriptions") + "\"")
+            buildConfigField("boolean", "WHISPER", "true")
+            // no server is built in: the user enters one in the Whisper settings (WHISPER_URL presets it for own builds)
+            buildConfigField("String", "WHISPER_URL", "\"" + (System.getenv("WHISPER_URL") ?: "") + "\"")
         }
         create("nouserlib") { // same as release, but does not allow the user to provide a library
             isMinifyEnabled = true

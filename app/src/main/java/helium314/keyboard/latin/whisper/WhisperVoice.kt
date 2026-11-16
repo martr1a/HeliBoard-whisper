@@ -45,7 +45,7 @@ import kotlin.math.sqrt
 
 /**
  * Voice input without switching keyboards: the mic key records here and sends the
- * audio to an OpenAI-compatible Whisper endpoint (BuildConfig.WHISPER_URL).
+ * audio to an OpenAI-compatible Whisper endpoint (set in the Whisper settings).
  * Tap mic: start; tap again or stay silent: stop and transcribe. Each recording is saved as a
  * file before upload and deleted only after the text arrived, so a server outage loses nothing.
  * Switching to another voice IME loses the text field in some apps (HeliBoard #1772).
@@ -62,7 +62,7 @@ object WhisperVoice {
     private const val MIN_SPEECH_RMS = 120.0
     private const val SPEECH_FACTOR = 2.5
 
-    val isEnabled get() = BuildConfig.WHISPER_URL.isNotEmpty()
+    val isEnabled get() = BuildConfig.WHISPER
 
     // user settings, changed in WhisperSettingsActivity
     const val PREFS = "whisper"
@@ -168,6 +168,11 @@ object WhisperVoice {
     fun onMicKey(context: Context, language: String?, root: View?, commit: (String) -> Boolean) {
         this.root = root
         this.commit = commit
+        if (url(context).isBlank()) { // no server yet: ask for one
+            Toast.makeText(context, "Whisper: sisesta serveri aadress / enter the server address", Toast.LENGTH_LONG).show()
+            context.startActivity(Intent(context, WhisperSettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        }
         when (state(context)) {
             State.RECORDING -> { stopRequested = true; return }
             State.SENDING -> return

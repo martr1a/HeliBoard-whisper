@@ -36,7 +36,8 @@ The `whisper` build type is the release build plus Whisper; it installs as
 ```bash
 export JAVA_HOME=/bulk/android/jdk ANDROID_HOME=/bulk/android/sdk
 export WHISPER_KEYSTORE_PASSWORD=$(cat ~/.config/heliboard-whisper/password)
-# optional: WHISPER_URL=https://host/v1/audio/transcriptions (default whisper.example.org)
+# optional: WHISPER_URL=https://host/v1/audio/transcriptions presets the server (default: none,
+# the user enters it in the Whisper settings; the mic key opens them while it is empty)
 ./gradlew assembleWhisper
 # -> app/build/outputs/apk/whisper/HeliBoard_<version>-whisper.apk
 ```
@@ -49,13 +50,13 @@ same folder. Keep both: an APK signed with another key cannot update the install
 All Whisper code is in `app/src/main/java/helium314/keyboard/latin/whisper/` and
 `app/src/whisper/`. Upstream files touched (keep this list short, for rebases):
 
-- `LatinIME.java` — mic key goes to `WhisperVoice` when `BuildConfig.WHISPER_URL` is set;
+- `LatinIME.java` — mic key goes to `WhisperVoice` when `BuildConfig.WHISPER` is true;
   recording is stopped and sent when the keyboard closes (`whisperCommit` reports whether a field took the text)
 - `ToolbarUtils.kt` — long-press of the mic key
 - `AndroidManifest.xml` — permission activity
 - `app/build.gradle.kts` — `whisper` build type, signing, BuildConfig fields
 
-Other build types have an empty `WHISPER_URL` and behave like upstream HeliBoard.
+Other build types have `WHISPER = false` and behave like upstream HeliBoard.
 
 ## Updating to a new HeliBoard release
 

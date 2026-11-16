@@ -1,3 +1,50 @@
+# HeliBoard Whisper
+
+A fork of [HeliBoard](https://github.com/HeliBorg/HeliBoard) with voice typing built into the keyboard.
+The mic key on the toolbar records your speech, sends it to **your own Whisper server** and types the
+text into the field. The keyboard never switches to another voice keyboard, so the text field is not
+lost in apps where that happens ([HeliBoard #1772](https://github.com/HeliBorg/HeliBoard/issues/1772)).
+
+**This fork uses the internet permission and the microphone**, unlike HeliBoard itself. Audio goes only
+to the server address you enter; nothing is built in. It installs next to the normal HeliBoard as a
+separate app (`helium314.keyboard.whisper`).
+
+## Install
+
+1. Download the APK from [Releases](https://github.com/martr1a/HeliBoard-whisper/releases/latest) and install it.
+2. Enable "HeliBoard Whisper" as a keyboard and select it.
+3. Tap the mic key on the toolbar. The first tap opens the Whisper settings: enter your server address,
+   e.g. `https://your-server/v1/audio/transcriptions`. The second tap asks for the microphone permission.
+
+You need a server with an OpenAI-compatible `/v1/audio/transcriptions` endpoint (for example
+faster-whisper-server / speaches or whisper.cpp's server). No API key is sent.
+
+## Use
+
+- Tap the mic: recording starts (mic turns red). Tap again, or stop talking for 3 s: the audio is sent
+  (mic turns orange) and the text is typed into the field.
+- Long-press the mic: next voice language (default list `auto, et, en`), shown on the mic key.
+- The screen stays on while you talk and while the text is on its way.
+- Nothing is lost: each recording is saved before upload and deleted only when the text has arrived.
+  If the server does not answer, the mic turns purple; tap it to send again.
+- If the text field goes away before the text arrives, the text goes to the clipboard and stays on the
+  toolbar row (marked `↳`); tap it there to type it into the field that is active now.
+- Optional live mode shows the text on the toolbar row while you talk. It needs a server with a
+  `/ws/live-transcribe` WebSocket endpoint; leave it off otherwise.
+
+Settings (pause before sending, languages, server, live mode) are the first entry, **Whisper**, in the
+keyboard settings. The settings screen is in Estonian for now.
+
+Details, build instructions and the list of changed upstream files: [WHISPER.md](WHISPER.md).
+
+The Whisper code was written with AI assistance (Claude).
+It is not part of HeliBoard and is not offered upstream: HeliBoard does not add the internet permission.
+Please report problems with voice input here, not to HeliBoard.
+
+Everything below is the original HeliBoard README.
+
+---
+
 # HeliBoard
 HeliBoard is a privacy-conscious and customizable open-source keyboard, based on AOSP / OpenBoard.
 Does not use internet permission, and thus is 100% offline.
