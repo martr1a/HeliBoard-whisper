@@ -17,6 +17,7 @@ another voice keyboard. Switching keyboards loses the text field in some apps
 - Audio is sent as AAC/m4a (~0.25 MB per minute), WAV if encoding fails or compression is off.
 - Optional "Tekst osade kaupa" (live): audio is streamed to the server's `/ws/live-transcribe`
 ; each utterance appears on the toolbar row next to the mic while you talk,
+  the sentence being spoken updates about every second (server `partial_ms=1000`),
   and the server's clean text of the whole recording goes into the field at the end. If the live
   connection fails, the recording is uploaded the normal way.
 - First tap asks for the microphone permission.

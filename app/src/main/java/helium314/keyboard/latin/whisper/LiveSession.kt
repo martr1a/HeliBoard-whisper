@@ -15,10 +15,15 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * One dictation streamed to the server's /ws/live-transcribe: text of each utterance
- * while talking ([onSegment]), one clean text of the whole recording at the end ([finish]).
+ * One dictation streamed to the server's /ws/live-transcribe: the current utterance as it
+ * grows ([onPartial], about every second), each finished utterance ([onSegment]) and one
+ * clean text of the whole recording at the end ([finish]).
  */
-class LiveSession(url: String, language: String?, private val onSegment: (String) -> Unit) {
+class LiveSession(
+    url: String, language: String?,
+    private val onSegment: (String) -> Unit,
+    private val onPartial: (String) -> Unit,
+) {
     @Volatile private var finalText: String? = null
     @Volatile var failed: String? = null
         private set
@@ -26,13 +31,14 @@ class LiveSession(url: String, language: String?, private val onSegment: (String
     private val ws: WebSocket
 
     init {
-        val full = url + (if ('?' in url) "&" else "?") + "final=true" +
+        val full = url + (if ('?' in url) "&" else "?") + "final=true&partial_ms=1000" +
                 (if (language != null) "&language=$language" else "")
         ws = client.newWebSocket(Request.Builder().url(full).build(), object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val m = try { JSONObject(text) } catch (_: Exception) { return }
                 when (m.optString("type")) {
                     "segment" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let(onSegment)
+                    "partial" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let(onPartial)
                     "final" -> finalText = m.optString("text").trim()
                     "done" -> done.countDown()
                     "error" -> { failed = m.optString("detail", "error"); done.countDown() }

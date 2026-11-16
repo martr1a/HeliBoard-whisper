@@ -187,11 +187,12 @@ object WhisperVoice {
         recording = true
         queuedFiles(context).filter { it.isPreview() }.forEach { it.delete() }
         previewText.setLength(0)
+        partialText = ""
         updateColor(context)
         val url = url(context)
         thread(name = "whisper-rec") {
             // live: stream to the server, pieces appear on the toolbar row while talking
-            val session = if (live) try { LiveSession(LiveSession.urlFor(url), language) { addPreview(it) } }
+            val session = if (live) try { LiveSession(LiveSession.urlFor(url), language, { addPreview(it) }, { setPartial(it) }) }
                 catch (e: Exception) { android.util.Log.w(TAG, "live session failed", e); null } else null
             liveSession = session
             try {
@@ -391,10 +392,25 @@ object WhisperVoice {
     private var previewView: TextView? = null
     private val hidden = mutableMapOf<View, Int>()
 
+    private var partialText = ""
+
+    /** a finished utterance: append it, the growing one starts over */
     private fun addPreview(piece: String) = main.post {
         if (previewText.isNotEmpty()) previewText.append(' ')
         previewText.append(piece)
-        root?.let { showPreview(it, previewText.toString()) }
+        partialText = ""
+        refreshPreview()
+    }
+
+    /** the utterance still being spoken, replaced about every second */
+    private fun setPartial(text: String) = main.post {
+        partialText = text
+        refreshPreview()
+    }
+
+    private fun refreshPreview() {
+        val text = listOf(previewText.toString(), partialText).filter { it.isNotEmpty() }.joinToString(" ")
+        root?.let { showPreview(it, text) }
     }
 
     private fun showPreview(root: View, text: String) {
