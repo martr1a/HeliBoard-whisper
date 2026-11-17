@@ -73,8 +73,8 @@ class LiveSession(
                 val m = try { JSONObject(text) } catch (_: Exception) { return }
                 when (m.optString("type")) {
                     "ready" -> decide(m.optString("format", "f32"), fromServer = true)
-                    "segment" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); onSegment(it) }
-                    "partial" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); onPartial(it) }
+                    "segment" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onSegment(it) }
+                    "partial" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onPartial(it) }
                     "final" -> {
                         finalAt = SystemClock.elapsedRealtime()
                         serverWaitMs = m.optInt("wait_ms", -1)
@@ -95,6 +95,14 @@ class LiveSession(
     }
 
     private fun firstText() { if (firstTextAt == 0L) firstTextAt = SystemClock.elapsedRealtime() }
+
+    /** when the server's text last changed: the server's speech detection, which works in a car too */
+    @Volatile var lastNewTextAt = 0L
+        private set
+    @Volatile private var lastText = ""
+    private fun heard(text: String) {
+        if (text != lastText) { lastText = text; lastNewTextAt = SystemClock.elapsedRealtime() }
+    }
 
     private fun decide(fmt: String, fromServer: Boolean) = synchronized(lock) {
         if (fromServer) ready.countDown()

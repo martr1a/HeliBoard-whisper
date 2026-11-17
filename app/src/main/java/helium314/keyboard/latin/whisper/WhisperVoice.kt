@@ -15,6 +15,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
@@ -58,9 +59,13 @@ object WhisperVoice {
     private const val RATE = 16_000
     private const val NO_SPEECH_MS = 8_000
     private const val MAX_MS = 180_000
-    // speech = louder than SPEECH_FACTOR x the noise floor measured in the first 300 ms
+    // speech = louder than SPEECH_FACTOR x the noise floor. The floor is the quietest 100 ms of
+    // the last 3 s, so steady noise (car, fan) raises it and speech on top of it still counts.
+    // In live mode new text from the server also counts as speech (its VAD works in a car).
     private const val MIN_SPEECH_RMS = 120.0
-    private const val SPEECH_FACTOR = 2.5
+    private const val SPEECH_FACTOR = 1.8
+    private const val NOISE_WINDOW = 30 // x 100 ms
+    private const val SERVER_SPEECH_MS = 1_500
 
     val isEnabled get() = BuildConfig.WHISPER
 
@@ -286,6 +291,8 @@ object WhisperVoice {
         var noise = 0.0
         var maxRms = 0.0
         var threshold = Double.MAX_VALUE
+        val recent = ArrayDeque<Double>()
+        var byServer = false
         rec.startRecording()
         try {
             while (!stopRequested && totalMs < MAX_MS) {
@@ -302,12 +309,15 @@ object WhisperVoice {
                 segMs += ms
                 val rms = sqrt(sum / n)
                 maxRms = maxOf(maxRms, rms)
-                if (totalMs <= 300) { // noise floor; the user rarely starts talking this fast
-                    noise = maxOf(noise, rms)
-                    threshold = maxOf(MIN_SPEECH_RMS, noise * SPEECH_FACTOR)
-                    continue
-                }
-                if (rms > threshold) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
+                recent.addLast(rms)
+                if (recent.size > NOISE_WINDOW) recent.removeFirst()
+                noise = recent.min()
+                threshold = maxOf(MIN_SPEECH_RMS, noise * SPEECH_FACTOR)
+                if (totalMs <= 300) continue // too little to tell noise from speech
+                val serverHeard = session != null && session.lastNewTextAt > 0 &&
+                        SystemClock.elapsedRealtime() - session.lastNewTextAt < SERVER_SPEECH_MS
+                if (serverHeard && rms <= threshold) byServer = true
+                if (rms > threshold || serverHeard) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
                 if (heardAny && quietMs >= silenceMs) break
                 if (!heardAny && totalMs >= NO_SPEECH_MS) break
                 if (live && segSpeech && segMs >= LIVE_MIN_MS && quietMs >= LIVE_PAUSE_MS) {
@@ -321,10 +331,11 @@ object WhisperVoice {
         } finally {
             rec.stop()
             rec.release()
-            android.util.Log.i(TAG, "recorded ${totalMs} ms, live ${if (session != null) "server" else live}, noise %.0f, threshold %.0f, max %.0f, speech $heardAny, stopped by tap $stopRequested".format(noise, threshold, maxRms))
+            android.util.Log.i(TAG, "recorded ${totalMs} ms, live ${if (session != null) "server" else live}, noise %.0f, threshold %.0f, max %.0f, speech $heardAny (server kept it going: $byServer), stopped by tap $stopRequested".format(noise, threshold, maxRms))
         }
-        // a tap always sends what was recorded; silence-stop sends only when speech was heard
-        if (heardAny || (stopRequested && totalMs >= 500)) segment(all.toByteArray(), true)
+        // Never throw a recording away on the keyboard's guess: when it heard nothing the server
+        // decides (silence comes back as empty text). In a car the guess was wrong and speech was lost.
+        if (heardAny || totalMs >= 1000 || (stopRequested && totalMs >= 500)) segment(all.toByteArray(), true)
     }
 
     /** Keep the piece as a file first, so a failed upload loses nothing. */
