@@ -89,6 +89,8 @@ class LiveSession(
                 }
             }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                // "Socket closed" after the final text is our own close, not a failure
+                if (done.count == 0L) return
                 failed = t.message ?: t.javaClass.simpleName
                 ready.countDown()
                 done.countDown()
@@ -104,6 +106,10 @@ class LiveSession(
         private set
     @Volatile private var lastText = ""
     @Volatile private var partials = 0
+    /** end of the last utterance the server heard (its VAD), in ms of audio; -1 before the first */
+    val lastSpeechEndMs: Long get() = synchronized(segments) { segments.maxOfOrNull { (it.second * 1000).toLong() } ?: -1L }
+    val healthy get() = failed == null
+
     /** server VAD segments [start, end] in seconds — labels for the loudness trace, no text */
     val segments: MutableList<Pair<Double, Double>> = java.util.Collections.synchronizedList(mutableListOf())
     private fun heard(text: String) {

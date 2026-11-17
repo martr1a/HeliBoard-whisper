@@ -66,6 +66,8 @@ object WhisperVoice {
     private const val SPEECH_FACTOR = 1.8
     private const val NOISE_WINDOW = 30 // x 100 ms
     private const val SERVER_SPEECH_MS = 1_500
+    // live end of speech: also no new server text this long (partials come about every second)
+    private const val SERVER_QUIET_MS = 2_000
     // the server alone (mic level never above the threshold) keeps a recording going at most this long
     private const val SERVER_ONLY_LIMIT_MS = 20_000
     private const val TRACES_KEPT = 30
@@ -350,6 +352,18 @@ object WhisperVoice {
                 if (serverHeard && rms <= threshold) byServer = true
                 if (rms > threshold) { stats.rmsHeard = true; rmsQuietMs = 0 } else rmsQuietMs += ms
                 if (rms > threshold || serverHeard) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
+                // Live: the server's VAD decides when speech ended. The mic level cannot in a car:
+                // 2026-11-17 road noise was as loud as the voice and no recording stopped by itself.
+                if (session != null && session.healthy && session.lastNewTextAt > 0) {
+                    val speechEnd = session.lastSpeechEndMs
+                    val textQuiet = SystemClock.elapsedRealtime() - session.lastNewTextAt
+                    if (speechEnd >= 0 && totalMs - speechEnd >= silenceMs && textQuiet >= SERVER_QUIET_MS) {
+                        stats.reason = "server silence"; break
+                    }
+                    if (totalMs >= NO_SPEECH_MS && textQuiet >= NO_SPEECH_MS) { stats.reason = "server no speech"; break }
+                    if (heardAny && rmsQuietMs >= SERVER_ONLY_LIMIT_MS && textQuiet >= silenceMs) { stats.reason = "server-only limit"; break }
+                    continue
+                }
                 if (heardAny && quietMs >= silenceMs) { stats.reason = "silence"; break }
                 if (!heardAny && totalMs >= NO_SPEECH_MS) { stats.reason = "no speech"; break }
                 // only the server's text keeps it going: stop eventually (noise can look like words)
