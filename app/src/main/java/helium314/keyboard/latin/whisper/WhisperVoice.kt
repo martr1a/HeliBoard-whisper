@@ -76,6 +76,9 @@ object WhisperVoice {
     const val KEY_COMPRESS = "compress"
     const val KEY_API_KEY = "api_key"
     const val KEY_MODEL = "model"
+    const val KEY_STREAM_FORMAT = "stream_format"
+    const val DEFAULT_STREAM_FORMAT = "s16"
+    const val KEY_LAST_TIMING = "last_timing"
     fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
 
@@ -204,9 +207,10 @@ object WhisperVoice {
         updateColor(context)
         val url = url(context)
         val apiKey = apiKey(context)
+        val streamFormat = p.getString(KEY_STREAM_FORMAT, DEFAULT_STREAM_FORMAT)!!
         thread(name = "whisper-rec") {
             // live: stream to the server, pieces appear on the toolbar row while talking
-            val session = if (live) try { LiveSession(LiveSession.urlFor(url), language, apiKey, { addPreview(it) }, { setPartial(it) }) }
+            val session = if (live) try { LiveSession(LiveSession.urlFor(url), language, apiKey, streamFormat, { addPreview(it) }, { setPartial(it) }) }
                 catch (e: Exception) { android.util.Log.w(TAG, "live session failed", e); null } else null
             liveSession = session
             try {
@@ -218,6 +222,7 @@ object WhisperVoice {
                         main.post { updateColor(context) }
                         val text = session.finish(60_000)
                         finishing = false
+                        noteTiming(context, session.summary())
                         if (text != null) {
                             android.util.Log.i(TAG, "live final: ${text.length} chars")
                             deliver(context, text)
@@ -365,14 +370,20 @@ object WhisperVoice {
                         continue
                     }
                     var text: String? = null
+                    val started = android.os.SystemClock.elapsedRealtime()
+                    var tries = 0
                     for (wait in RETRY_WAIT_MS) {
                         if (wait > 0) Thread.sleep(wait)
+                        tries++
                         try { text = transcribe(url, apiKey, model, f, lang); break }
                         catch (e: Exception) { android.util.Log.w(TAG, "upload failed", e); failed = e.message ?: e.javaClass.simpleName }
                     }
                     if (text == null) break
                     failed = null
                     android.util.Log.i(TAG, "sent ${f.name} (${f.length() / 1024} KB): ${text.length} chars")
+                    noteTiming(context, "üleslaadimine ${f.name.substringAfterLast('.')}, ${f.length() / 1024} KB, " +
+                            "tekst %.1f s pärast saatmise algust".format((android.os.SystemClock.elapsedRealtime() - started) / 1000f) +
+                            if (tries > 1) " ($tries katset)" else "")
                     f.delete()
                     deliver(context, text.trim())
                 }
@@ -385,6 +396,15 @@ object WhisperVoice {
             if (failed != null) main.post { root?.let { hidePreview(it) } }
             failed?.let { toast(context, "Whisper: saatmine ebaõnnestus ($it). Salvestus on alles – vajuta mikrofoni uuesti.") }
         }
+    }
+
+    /** Where the time of the last dictation went; shown in the Whisper settings. */
+    private fun noteTiming(context: Context, line: String) {
+        android.util.Log.i(TAG, "timing: $line")
+        val at = java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(java.util.Date())
+        // the live line and the upload line of one dictation both stay visible
+        val old = prefs(context).getString(KEY_LAST_TIMING, "")!!.lines().filter { it.isNotBlank() }
+        prefs(context).edit().putString(KEY_LAST_TIMING, (listOf("$at $line") + old).take(6).joinToString("\n")).apply()
     }
 
     private fun deliver(context: Context, text: String) {

@@ -24,6 +24,12 @@ another voice keyboard. Switching keyboards loses the text field in some apps
   the sentence being spoken updates about every second (server `partial_ms=1000`),
   and the server's clean text of the whole recording goes into the field at the end. If the live
   connection fails, the recording is uploaded the normal way.
+- The live stream goes out as 16-bit PCM by default (256 kbit/s); the Whisper settings also offer
+  Opus (about 24 kbit/s, for slow mobile uplinks; Android 10+) and raw float32 (512 kbit/s). A raw
+  stream on an uplink slower than its bitrate falls behind and the text comes late. The server
+  announces format support in its first message (`ready`); one that does not gets float32.
+- The Whisper settings show where the time of the last dictations went: connection, first text,
+  send queue, and the wait for the final text split into server queue, model and network.
 - First tap asks for the microphone permission.
 - Settings: **Whisper**, the first entry in the keyboard settings — pause before sending (default 3 s), language list,
   server address, API key and model (for hosted services; sent as `Authorization: Bearer`). Changes apply to the next recording, no rebuild needed.

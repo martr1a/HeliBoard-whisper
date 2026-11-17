@@ -9,6 +9,8 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
@@ -79,6 +81,25 @@ class WhisperSettingsActivity : Activity() {
         switch("Tekst osade kaupa", WhisperVoice.KEY_LIVE, false,
             "Iga lühikese pausi järel saadetakse valmis osa kohe ära ja tekst ilmub rääkimise ajal. " +
                     "Salvestus lõpeb ikka ülal valitud pausiga või mikrofoni vajutusega.")
+        // audio format of the live stream
+        col.addView(label("Voo helivorming (tekst osade kaupa)"))
+        val formats = listOf("opus" to "Opus – umbes 24 kbit/s", "s16" to "16-bitine – 256 kbit/s", "f32" to "Pakkimata – 512 kbit/s")
+        val currentFormat = prefs.getString(WhisperVoice.KEY_STREAM_FORMAT, WhisperVoice.DEFAULT_STREAM_FORMAT)
+        col.addView(RadioGroup(this).apply {
+            formats.forEachIndexed { i, (value, text) ->
+                addView(RadioButton(this@WhisperSettingsActivity).apply {
+                    id = i + 1
+                    this.text = text
+                    isChecked = value == currentFormat
+                })
+            }
+            setOnCheckedChangeListener { _, id ->
+                prefs.edit().putString(WhisperVoice.KEY_STREAM_FORMAT, formats[id - 1].first).apply()
+            }
+        })
+        col.addView(label("Aeglase mobiilse ühendusega jääb pakkimata voog jutust maha ja tekst hilineb. " +
+                "Server, mis vorminguid ei tunne, saab alati pakkimata voo.", 13f))
+
         switch("Pakitud heli", WhisperVoice.KEY_COMPRESS, true,
             "Saadab AAC-faili (umbes 0,25 MB minutis) WAV-i (2 MB minutis) asemel.")
 
@@ -92,6 +113,10 @@ class WhisperSettingsActivity : Activity() {
         col.addView(clear)
         col.addView(label("Kui server ei vasta, jääb salvestus alles ja mikrofon on lilla. " +
                 "Mikrofoni vajutus saadab selle uuesti.", 13f))
+
+        col.addView(label("Viimaste salvestuste ajakulu"))
+        timing = label("", 13f).apply { setTextIsSelectable(true) }
+        col.addView(timing)
 
         col.addView(label("Keeled"))
         languages = EditText(this).apply {
@@ -148,10 +173,13 @@ class WhisperSettingsActivity : Activity() {
     }
 
     private lateinit var pending: TextView
+    private lateinit var timing: TextView
 
     private fun showPending() {
         val n = WhisperVoice.pendingFiles(this).size
         pending.text = if (n == 0) "Ootel salvestusi pole" else "Ootel salvestusi: $n"
+        timing.text = WhisperVoice.prefs(this).getString(WhisperVoice.KEY_LAST_TIMING, "")!!.ifBlank { "Veel pole mõõdetud." }
+            .lines().joinToString("\n\n")
     }
 
     override fun onResume() {
