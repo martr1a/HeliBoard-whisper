@@ -82,8 +82,8 @@ class WhisperSettingsActivity : Activity() {
             "Iga lühikese pausi järel saadetakse valmis osa kohe ära ja tekst ilmub rääkimise ajal. " +
                     "Salvestus lõpeb ikka ülal valitud pausiga või mikrofoni vajutusega.")
         // audio format of the live stream
-        col.addView(label("Voo helivorming (tekst osade kaupa)"))
-        val formats = listOf("opus" to "Opus – umbes 24 kbit/s", "s16" to "16-bitine – 256 kbit/s", "f32" to "Pakkimata – 512 kbit/s")
+        col.addView(label("Voo andmemaht (tekst osade kaupa)"))
+        val formats = listOf("opus" to "Väike – tugev pakkimine, aeglasele ühendusele", "s16" to "Keskmine – kerge pakkimine", "f32" to "Suur – pakkimata")
         val currentFormat = prefs.getString(WhisperVoice.KEY_STREAM_FORMAT, WhisperVoice.DEFAULT_STREAM_FORMAT)
         col.addView(RadioGroup(this).apply {
             formats.forEachIndexed { i, (value, text) ->
@@ -97,8 +97,8 @@ class WhisperSettingsActivity : Activity() {
                 prefs.edit().putString(WhisperVoice.KEY_STREAM_FORMAT, formats[id - 1].first).apply()
             }
         })
-        col.addView(label("Aeglase mobiilse ühendusega jääb pakkimata voog jutust maha ja tekst hilineb. " +
-                "Server, mis vorminguid ei tunne, saab alati pakkimata voo.", 13f))
+        col.addView(label("Väike umbes 24, keskmine 256 ja suur 512 kbit/s. Kui ühendus on sellest aeglasem, jääb voog jutust maha " +
+                "ja tekst hilineb. Server, mis pakkimist ei tunne, saab alati pakkimata voo.", 13f))
 
         switch("Pakitud heli", WhisperVoice.KEY_COMPRESS, true,
             "Saadab AAC-faili (umbes 0,25 MB minutis) WAV-i (2 MB minutis) asemel.")

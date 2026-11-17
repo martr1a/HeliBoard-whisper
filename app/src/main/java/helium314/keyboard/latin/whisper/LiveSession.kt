@@ -179,7 +179,7 @@ class LiveSession(
         fun s(ms: Long) = "%.1f s".format(ms / 1000f)
         val parts = ArrayList<String>()
         val audioMs = samples * 1000 / RATE
-        parts += "voog ${format ?: asked}, ${s(audioMs)} heli, ${bytes / 1024} KB" +
+        parts += "voog ${mapOf("opus" to "väike", "s16" to "keskmine", "f32" to "suur")[format ?: asked]}, ${s(audioMs)} heli, ${bytes / 1024} KB" +
                 if (audioMs > 0) " (${bytes * 8 / audioMs} kbit/s)" else ""
         if (openedAt != 0L) parts += "ühendus ${openedAt - created} ms"
         if (firstTextAt != 0L) parts += "esimene tekst ${s(firstTextAt - created)}"
