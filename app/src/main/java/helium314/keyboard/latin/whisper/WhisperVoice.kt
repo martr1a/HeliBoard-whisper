@@ -84,6 +84,7 @@ object WhisperVoice {
     const val KEY_STREAM_FORMAT = "stream_format"
     const val DEFAULT_STREAM_FORMAT = "s16"
     const val KEY_LAST_TIMING = "last_timing"
+    const val KEY_HISTORY = "history"
     fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
 
@@ -419,6 +420,7 @@ object WhisperVoice {
     }
 
     private fun deliver(context: Context, text: String) {
+        remember(context, text)
         if (text.isEmpty()) return
         main.post {
             root?.let { hidePreview(it) }
@@ -433,6 +435,22 @@ object WhisperVoice {
             showHeld()
         }
     }
+
+    /** The last dictations, newest first, as (time, text); kept so a lost text can be copied. */
+    fun history(context: Context): List<Pair<String, String>> {
+        val a = try { org.json.JSONArray(prefs(context).getString(KEY_HISTORY, "[]")) } catch (_: Exception) { org.json.JSONArray() }
+        return (0 until a.length()).map { val o = a.getJSONObject(it); o.optString("at") to o.optString("text") }
+    }
+
+    private fun remember(context: Context, text: String) {
+        val at = java.text.SimpleDateFormat("dd.MM HH:mm", Locale.ROOT).format(java.util.Date())
+        val items = listOf(at to text) + history(context).take(HISTORY_SIZE - 1)
+        val a = org.json.JSONArray()
+        items.forEach { (t, x) -> a.put(JSONObject().put("at", t).put("text", x)) }
+        prefs(context).edit().putString(KEY_HISTORY, a.toString()).apply()
+    }
+
+    private const val HISTORY_SIZE = 10
 
     /** Held text on the toolbar row; a tap types it into the field that is active now. */
     private fun showHeld() {

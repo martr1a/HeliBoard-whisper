@@ -114,6 +114,11 @@ class WhisperSettingsActivity : Activity() {
         col.addView(label("Kui server ei vasta, jääb salvestus alles ja mikrofon on lilla. " +
                 "Mikrofoni vajutus saadab selle uuesti.", 13f))
 
+        col.addView(label("Viimased dikteerimised"))
+        col.addView(label("Kui tekst lahtrisse ei jõudnud, kopeeri see siit. Hoitakse 10 viimast, ainult selles telefonis.", 13f))
+        history = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(history)
+
         col.addView(label("Viimaste salvestuste ajakulu"))
         timing = label("", 13f).apply { setTextIsSelectable(true) }
         col.addView(timing)
@@ -174,10 +179,34 @@ class WhisperSettingsActivity : Activity() {
 
     private lateinit var pending: TextView
     private lateinit var timing: TextView
+    private lateinit var history: LinearLayout
+
+    private fun showHistory() {
+        history.removeAllViews()
+        val items = WhisperVoice.history(this)
+        if (items.isEmpty()) { history.addView(TextView(this).apply { text = "Veel pole." }); return }
+        for ((at, text) in items) {
+            history.addView(TextView(this).apply {
+                this.text = if (text.isEmpty()) "$at — tühi tekst (server ei kuulnud kõnet)" else "$at — $text"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextIsSelectable(true)
+                setPadding(0, dp(10), 0, dp(2))
+            })
+            if (text.isNotEmpty()) history.addView(Button(this).apply {
+                this.text = "Kopeeri"
+                setOnClickListener {
+                    val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Whisper", text))
+                    android.widget.Toast.makeText(this@WhisperSettingsActivity, "Kopeeritud", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            })
+        }
+    }
 
     private fun showPending() {
         val n = WhisperVoice.pendingFiles(this).size
         pending.text = if (n == 0) "Ootel salvestusi pole" else "Ootel salvestusi: $n"
+        showHistory()
         timing.text = WhisperVoice.prefs(this).getString(WhisperVoice.KEY_LAST_TIMING, "")!!.ifBlank { "Veel pole mõõdetud." }
             .lines().joinToString("\n\n")
     }
