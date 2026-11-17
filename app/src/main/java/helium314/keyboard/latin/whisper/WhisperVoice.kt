@@ -88,6 +88,7 @@ object WhisperVoice {
     const val DEFAULT_STREAM_FORMAT = "s16"
     const val KEY_LAST_TIMING = "last_timing"
     const val KEY_HISTORY = "history"
+    const val KEY_TRACES = "traces"
     fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun url(context: Context) = prefs(context).getString(KEY_URL, null)?.takeIf { it.isNotBlank() } ?: BuildConfig.WHISPER_URL
 
@@ -224,6 +225,9 @@ object WhisperVoice {
             liveSession = session
             val stats = RecStats()
             var finalChars = -1
+            var fallback = false
+            val tracing = prefs(context).getBoolean(KEY_TRACES, true)
+            val atStart = if (tracing) snapshot(context) else null
             try {
                 record(silenceMs, live && session == null, stats) { pcm, final ->
                     if (!final) { save(context, pcm, language, compress, false); startSending(context); return@record }
@@ -242,6 +246,7 @@ object WhisperVoice {
                             return@record
                         }
                         android.util.Log.w(TAG, "live failed (${session.failed}), uploading the recording")
+                        fallback = true
                     }
                     save(context, pcm, language, compress, true, quiet)
                     startSending(context)
@@ -251,7 +256,9 @@ object WhisperVoice {
                 toast(context, "Whisper: ${e.message}")
             } finally {
                 session?.abort() // no-op after finish; closes it when nothing was said
-                try { saveTrace(context, stats, session, silenceMs, finalChars) } catch (e: Exception) { android.util.Log.w(TAG, "trace", e) }
+                if (tracing) try {
+                    saveTrace(context, stats, session, silenceMs, finalChars, language, fallback, atStart, snapshot(context))
+                } catch (e: Exception) { android.util.Log.w(TAG, "trace", e) }
                 liveSession = null
                 finishing = false
                 recording = false
@@ -284,6 +291,7 @@ object WhisperVoice {
     /** What one recording looked like: loudness every 100 ms and why it stopped. No audio, no text. */
     private class RecStats {
         val rms = ArrayList<Int>()
+        var input: org.json.JSONObject? = null   // which microphone Android used
         var rmsHeard = false      // the mic level itself crossed the threshold at least once
         var byServer = false
         var reason = "?"
@@ -313,6 +321,9 @@ object WhisperVoice {
         var byServer = false
         var rmsQuietMs = 0
         rec.startRecording()
+        stats.input = try { rec.routedDevice?.let { d ->
+            org.json.JSONObject().put("type", deviceType(d.type)).put("name", d.productName?.toString() ?: "")
+        } } catch (_: Exception) { null }
         try {
             while (!stopRequested && totalMs < MAX_MS) {
                 val n = rec.read(buf, 0, buf.size)
@@ -507,7 +518,8 @@ object WhisperVoice {
      * speech threshold for noisy places. Numbers only — no audio, no text. Kept in the app's
      * external files dir, readable over adb: /sdcard/Android/data/<package>/files/whisper_traces/.
      */
-    private fun saveTrace(context: Context, stats: RecStats, session: LiveSession?, silenceMs: Int, finalChars: Int) {
+    private fun saveTrace(context: Context, stats: RecStats, session: LiveSession?, silenceMs: Int, finalChars: Int,
+                          language: String?, fallback: Boolean, start: JSONObject?, end: JSONObject?) {
         if (stats.rms.isEmpty()) return
         val dir = File(context.getExternalFilesDir(null) ?: context.filesDir, "whisper_traces").apply { mkdirs() }
         val o = JSONObject()
@@ -517,7 +529,13 @@ object WhisperVoice {
             .put("reason", stats.reason).put("total_ms", stats.totalMs)
             .put("rms_heard", stats.rmsHeard).put("by_server", stats.byServer)
             .put("final_chars", finalChars)
+            .put("language", language ?: "auto")
+            .put("fallback_upload", fallback)
+            .put("version", BuildConfig.VERSION_NAME)
+            .put("input", stats.input ?: JSONObject.NULL)
+            .put("start", start ?: JSONObject.NULL).put("end", end ?: JSONObject.NULL)
             .put("rms", org.json.JSONArray(stats.rms))
+        session?.let { o.put("live_metrics", it.metrics()) }
         if (session != null) {
             val segs = org.json.JSONArray()
             synchronized(session.segments) { session.segments.forEach { (a, b) -> segs.put(org.json.JSONArray().put(a).put(b)) } }
@@ -525,6 +543,57 @@ object WhisperVoice {
         }
         File(dir, "${System.currentTimeMillis()}.json").writeText(o.toString())
         dir.listFiles()?.sortedBy { it.name }?.dropLast(TRACES_KEPT)?.forEach { it.delete() }
+    }
+
+    fun clearTraces(context: Context) { traces(context).forEach { it.delete() } }
+
+    /** Network, Bluetooth/car audio, power saving and the app being typed into — no content. */
+    private fun snapshot(context: Context): JSONObject {
+        val o = JSONObject()
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val net = cm.activeNetwork
+            val caps = net?.let { cm.getNetworkCapabilities(it) }
+            o.put("network_id", net?.toString() ?: "none")
+            if (caps != null) {
+                val t = android.net.NetworkCapabilities::class.java
+                o.put("transport", when {
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+                    else -> "other" })
+                o.put("vpn", caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN))
+                o.put("up_kbps", caps.linkUpstreamBandwidthKbps).put("down_kbps", caps.linkDownstreamBandwidthKbps)
+                o.put("validated", caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+                o.put("metered", !caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+                if (android.os.Build.VERSION.SDK_INT >= 29) o.put("signal", caps.signalStrength)
+            }
+        } catch (e: Exception) { o.put("network_error", e.javaClass.simpleName) }
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val outs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+            o.put("bluetooth_audio", org.json.JSONArray(outs.filter {
+                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        (android.os.Build.VERSION.SDK_INT >= 31 && it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET)
+            }.map { "${deviceType(it.type)}:${it.productName}" }.distinct()))
+        } catch (_: Exception) {}
+        try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            o.put("power_save", pm.isPowerSaveMode).put("screen_on", pm.isInteractive)
+        } catch (_: Exception) {}
+        (context as? android.inputmethodservice.InputMethodService)?.currentInputEditorInfo?.packageName?.let { o.put("app", it) }
+        return o
+    }
+
+    private fun deviceType(t: Int) = when (t) {
+        android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC -> "builtin_mic"
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bluetooth_sco"
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "bluetooth_a2dp"
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET -> "wired_headset"
+        android.media.AudioDeviceInfo.TYPE_USB_DEVICE, android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> "usb"
+        26 -> "ble_headset"
+        else -> "type$t"
     }
 
     fun traces(context: Context): List<File> =

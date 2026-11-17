@@ -124,6 +124,18 @@ class WhisperSettingsActivity : Activity() {
         })
         col.addView(label("Ajalugu ja ootel salvestused ei lähe telefoni varukoopiasse.", 13f))
 
+        switch("Mõõtmiste kogumine", WhisperVoice.KEY_TRACES, true,
+            "Iga salvestuse kohta helitugevus iga 0,1 s järel, serveri kõneajad, ühenduse ajad ja maht, " +
+                    "võrk (Wi-Fi/mobiil, hinnanguline ribalaius), mikrofon (telefon/Bluetooth/auto), rakendus, " +
+                    "kuhu kirjutati. Heli ega teksti ei salvestata. Hoitakse 30 viimast, ainult telefonis; " +
+                    "nende järgi häälestatakse kõnelävi ja ühendus.")
+        traceCount = label("", 13f)
+        col.addView(traceCount)
+        col.addView(Button(this).apply {
+            text = "Kustuta mõõtmised"
+            setOnClickListener { WhisperVoice.clearTraces(this@WhisperSettingsActivity); showPending() }
+        })
+
         col.addView(label("Viimaste salvestuste ajakulu"))
         timing = label("", 13f).apply { setTextIsSelectable(true) }
         col.addView(timing)
@@ -185,6 +197,7 @@ class WhisperSettingsActivity : Activity() {
     private lateinit var pending: TextView
     private lateinit var timing: TextView
     private lateinit var history: LinearLayout
+    private lateinit var traceCount: TextView
 
     private fun showHistory() {
         history.removeAllViews()
@@ -212,6 +225,7 @@ class WhisperSettingsActivity : Activity() {
         val n = WhisperVoice.pendingFiles(this).size
         pending.text = if (n == 0) "Ootel salvestusi pole" else "Ootel salvestusi: $n"
         showHistory()
+        traceCount.text = "Salvestatud mõõtmisi: ${WhisperVoice.traces(this).size}"
         timing.text = WhisperVoice.prefs(this).getString(WhisperVoice.KEY_LAST_TIMING, "")!!.ifBlank { "Veel pole mõõdetud." }
             .lines().joinToString("\n\n")
     }

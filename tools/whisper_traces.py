@@ -59,6 +59,14 @@ def main(folder):
         print(f"{t['at']}  {t['total_ms']/1000:5.1f} s  stop={t['reason']:<17} "
               f"background median {statistics.median(bg) if bg else 0:6.0f}  "
               f"speech median {statistics.median(sp) if sp else 0:6.0f}  ratio {ratio:4.1f}")
+        st, en, lm = t.get("start") or {}, t.get("end") or {}, t.get("live_metrics") or {}
+        mic = (t.get("input") or {}).get("type", "?")
+        net = st.get("transport", "?") + (" -> " + en.get("transport", "?") if en.get("network_id") != st.get("network_id") else "")
+        print(f"    mic {mic}, bt {','.join(st.get('bluetooth_audio', [])) or '-'}, app {st.get('app', '?')}, "
+              f"net {net} up~{st.get('up_kbps', '?')} kbit/s, stream {lm.get('format', '-')} {lm.get('kbit_s', '-')} kbit/s, "
+              f"connect {lm.get('connect_ms', '-')} ms, final {lm.get('final_after_end_ms', '-')} ms after end"
+              + (", FALLBACK upload" if t.get("fallback_upload") else "")
+              + (f", failed: {lm['failed']}" if lm.get("failed") else ""))
     print("\nfactor  speech heard  background as speech  stop after last word (median, never stops)")
     for f in FACTORS:
         hit = tot = fp = bgn = 0

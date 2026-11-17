@@ -77,7 +77,7 @@ class LiveSession(
                         segments.add(m.optDouble("start", -1.0) to m.optDouble("end", -1.0))
                         m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onSegment(it) }
                     }
-                    "partial" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onPartial(it) }
+                    "partial" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { partials++; firstText(); heard(it); onPartial(it) }
                     "final" -> {
                         finalAt = SystemClock.elapsedRealtime()
                         serverWaitMs = m.optInt("wait_ms", -1)
@@ -103,6 +103,7 @@ class LiveSession(
     @Volatile var lastNewTextAt = 0L
         private set
     @Volatile private var lastText = ""
+    @Volatile private var partials = 0
     /** server VAD segments [start, end] in seconds — labels for the loudness trace, no text */
     val segments: MutableList<Pair<Double, Double>> = java.util.Collections.synchronizedList(mutableListOf())
     private fun heard(text: String) {
@@ -188,6 +189,23 @@ class LiveSession(
     }
 
     /** One line for the log and the settings screen: where the time of this dictation went. */
+    /** The same numbers as [summary], for the per-recording trace. */
+    fun metrics(): JSONObject {
+        val audioMs = samples * 1000 / RATE
+        val o = JSONObject()
+            .put("format", format ?: asked)
+            .put("audio_ms", audioMs).put("bytes", bytes)
+            .put("kbit_s", if (audioMs > 0) bytes * 8 / audioMs else -1)
+            .put("connect_ms", if (openedAt != 0L) openedAt - created else -1)
+            .put("first_text_ms", if (firstTextAt != 0L) firstTextAt - created else -1)
+            .put("queued_max_bytes", queuedMax).put("queued_end_bytes", queuedAtEnd)
+            .put("final_after_end_ms", if (finalAt != 0L && endAt != 0L) finalAt - endAt else -1)
+            .put("server_wait_ms", serverWaitMs).put("server_asr_ms", serverAsrMs)
+            .put("partials", partials).put("segment_count", segments.size)
+        failed?.let { o.put("failed", it) }
+        return o
+    }
+
     fun summary(): String {
         fun s(ms: Long) = "%.1f s".format(ms / 1000f)
         val parts = ArrayList<String>()
