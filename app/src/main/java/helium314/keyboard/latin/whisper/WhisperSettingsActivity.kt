@@ -118,6 +118,11 @@ class WhisperSettingsActivity : Activity() {
         col.addView(label("Kui tekst lahtrisse ei jõudnud, kopeeri see siit. Hoitakse 10 viimast, ainult selles telefonis.", 13f))
         history = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(history)
+        col.addView(Button(this).apply {
+            text = "Kustuta ajalugu"
+            setOnClickListener { WhisperVoice.clearHistory(this@WhisperSettingsActivity); showHistory() }
+        })
+        col.addView(label("Ajalugu ja ootel salvestused ei lähe telefoni varukoopiasse.", 13f))
 
         col.addView(label("Viimaste salvestuste ajakulu"))
         timing = label("", 13f).apply { setTextIsSelectable(true) }

@@ -73,7 +73,10 @@ class LiveSession(
                 val m = try { JSONObject(text) } catch (_: Exception) { return }
                 when (m.optString("type")) {
                     "ready" -> decide(m.optString("format", "f32"), fromServer = true)
-                    "segment" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onSegment(it) }
+                    "segment" -> {
+                        segments.add(m.optDouble("start", -1.0) to m.optDouble("end", -1.0))
+                        m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onSegment(it) }
+                    }
                     "partial" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onPartial(it) }
                     "final" -> {
                         finalAt = SystemClock.elapsedRealtime()
@@ -100,6 +103,8 @@ class LiveSession(
     @Volatile var lastNewTextAt = 0L
         private set
     @Volatile private var lastText = ""
+    /** server VAD segments [start, end] in seconds — labels for the loudness trace, no text */
+    val segments: MutableList<Pair<Double, Double>> = java.util.Collections.synchronizedList(mutableListOf())
     private fun heard(text: String) {
         if (text != lastText) { lastText = text; lastNewTextAt = SystemClock.elapsedRealtime() }
     }

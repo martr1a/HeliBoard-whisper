@@ -66,6 +66,9 @@ object WhisperVoice {
     private const val SPEECH_FACTOR = 1.8
     private const val NOISE_WINDOW = 30 // x 100 ms
     private const val SERVER_SPEECH_MS = 1_500
+    // the server alone (mic level never above the threshold) keeps a recording going at most this long
+    private const val SERVER_ONLY_LIMIT_MS = 20_000
+    private const val TRACES_KEPT = 30
 
     val isEnabled get() = BuildConfig.WHISPER
 
@@ -219,9 +222,12 @@ object WhisperVoice {
             val session = if (live) try { LiveSession(LiveSession.urlFor(url), language, apiKey, streamFormat, { addPreview(it) }, { setPartial(it) }) }
                 catch (e: Exception) { android.util.Log.w(TAG, "live session failed", e); null } else null
             liveSession = session
+            val stats = RecStats()
+            var finalChars = -1
             try {
-                record(silenceMs, live && session == null) { pcm, final ->
+                record(silenceMs, live && session == null, stats) { pcm, final ->
                     if (!final) { save(context, pcm, language, compress, false); startSending(context); return@record }
+                    val quiet = !stats.rmsHeard
                     if (session != null) {
                         finishing = true
                         recording = false
@@ -231,12 +237,13 @@ object WhisperVoice {
                         noteTiming(context, session.summary())
                         if (text != null) {
                             android.util.Log.i(TAG, "live final: ${text.length} chars")
-                            deliver(context, text)
+                            finalChars = text.length
+                            deliver(context, text, quiet)
                             return@record
                         }
                         android.util.Log.w(TAG, "live failed (${session.failed}), uploading the recording")
                     }
-                    save(context, pcm, language, compress, true)
+                    save(context, pcm, language, compress, true, quiet)
                     startSending(context)
                 }
             } catch (e: Exception) {
@@ -244,6 +251,7 @@ object WhisperVoice {
                 toast(context, "Whisper: ${e.message}")
             } finally {
                 session?.abort() // no-op after finish; closes it when nothing was said
+                try { saveTrace(context, stats, session, silenceMs, finalChars) } catch (e: Exception) { android.util.Log.w(TAG, "trace", e) }
                 liveSession = null
                 finishing = false
                 recording = false
@@ -273,9 +281,18 @@ object WhisperVoice {
 
     // ---- recording ---------------------------------------------------------------------
 
+    /** What one recording looked like: loudness every 100 ms and why it stopped. No audio, no text. */
+    private class RecStats {
+        val rms = ArrayList<Int>()
+        var rmsHeard = false      // the mic level itself crossed the threshold at least once
+        var byServer = false
+        var reason = "?"
+        var totalMs = 0
+    }
+
     /** Records until silence/tap. Live: [segment] gets a preview piece at every pause; always the whole recording at the end. */
     @SuppressLint("MissingPermission") // checked in onMicKey
-    private fun record(silenceMs: Int, live: Boolean, segment: (ByteArray, Boolean) -> Unit) {
+    private fun record(silenceMs: Int, live: Boolean, stats: RecStats, segment: (ByteArray, Boolean) -> Unit) {
         val session = liveSession
         val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
@@ -294,6 +311,7 @@ object WhisperVoice {
         var threshold = Double.MAX_VALUE
         val recent = ArrayDeque<Double>()
         var byServer = false
+        var rmsQuietMs = 0
         rec.startRecording()
         try {
             while (!stopRequested && totalMs < MAX_MS) {
@@ -310,6 +328,7 @@ object WhisperVoice {
                 segMs += ms
                 val rms = sqrt(sum / n)
                 maxRms = maxOf(maxRms, rms)
+                stats.rms.add(rms.toInt())
                 recent.addLast(rms)
                 if (recent.size > NOISE_WINDOW) recent.removeFirst()
                 noise = recent.min()
@@ -318,9 +337,12 @@ object WhisperVoice {
                 val serverHeard = session != null && session.lastNewTextAt > 0 &&
                         SystemClock.elapsedRealtime() - session.lastNewTextAt < SERVER_SPEECH_MS
                 if (serverHeard && rms <= threshold) byServer = true
+                if (rms > threshold) { stats.rmsHeard = true; rmsQuietMs = 0 } else rmsQuietMs += ms
                 if (rms > threshold || serverHeard) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
-                if (heardAny && quietMs >= silenceMs) break
-                if (!heardAny && totalMs >= NO_SPEECH_MS) break
+                if (heardAny && quietMs >= silenceMs) { stats.reason = "silence"; break }
+                if (!heardAny && totalMs >= NO_SPEECH_MS) { stats.reason = "no speech"; break }
+                // only the server's text keeps it going: stop eventually (noise can look like words)
+                if (heardAny && rmsQuietMs >= SERVER_ONLY_LIMIT_MS) { stats.reason = "server-only limit"; break }
                 if (live && segSpeech && segMs >= LIVE_MIN_MS && quietMs >= LIVE_PAUSE_MS) {
                     android.util.Log.i(TAG, "live piece at $totalMs ms ($segMs ms)")
                     segment(out.toByteArray(), false)
@@ -332,6 +354,10 @@ object WhisperVoice {
         } finally {
             rec.stop()
             rec.release()
+            stats.totalMs = totalMs
+            stats.byServer = byServer
+            if (stopRequested) stats.reason = "tap"
+            else if (totalMs >= MAX_MS) stats.reason = "max length"
             android.util.Log.i(TAG, "recorded ${totalMs} ms, live ${if (session != null) "server" else live}, noise %.0f, threshold %.0f, max %.0f, speech $heardAny (server kept it going: $byServer), stopped by tap $stopRequested".format(noise, threshold, maxRms))
         }
         // Never throw a recording away on the keyboard's guess: when it heard nothing the server
@@ -340,8 +366,9 @@ object WhisperVoice {
     }
 
     /** Keep the piece as a file first, so a failed upload loses nothing. */
-    private fun save(context: Context, pcm: ByteArray, language: String?, compress: Boolean, final: Boolean) {
-        val base = "${System.currentTimeMillis()}_${language ?: "auto"}_${if (final) "f" else "p"}"
+    private fun save(context: Context, pcm: ByteArray, language: String?, compress: Boolean, final: Boolean, quiet: Boolean = false) {
+        // kind: p = live preview piece, f = final, q = final in which the mic level never showed speech
+        val base = "${System.currentTimeMillis()}_${language ?: "auto"}_${if (!final) "p" else if (quiet) "q" else "f"}"
         val dir = pendingDir(context)
         if (compress) {
             val tmp = File(dir, "$base.m4a.part")
@@ -397,7 +424,7 @@ object WhisperVoice {
                             "tekst %.1f s pärast saatmise algust".format((android.os.SystemClock.elapsedRealtime() - started) / 1000f) +
                             if (tries > 1) " ($tries katset)" else "")
                     f.delete()
-                    deliver(context, text.trim())
+                    deliver(context, text.trim(), quiet = f.name.substringBefore('.').endsWith("_q"))
                 }
             } finally {
                 draining.set(false)
@@ -419,7 +446,16 @@ object WhisperVoice {
         prefs(context).edit().putString(KEY_LAST_TIMING, (listOf("$at $line") + old).take(6).joinToString("\n")).apply()
     }
 
-    private fun deliver(context: Context, text: String) {
+    private fun deliver(context: Context, text: String, quiet: Boolean = false) {
+        if (quiet && text.isNotEmpty() && looksLikeHallucination(text)) {
+            // the mic heard no speech and Whisper returned a stock phrase: keep it out of the field
+            remember(context, text, held = true)
+            main.post {
+                root?.let { hidePreview(it) }
+                Toast.makeText(context, "Whisper: kõnet ei kuulnud, „$text“ jäi lisamata (Whisperi seadetes saab kopeerida)", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
         remember(context, text)
         if (text.isEmpty()) return
         main.post {
@@ -442,8 +478,11 @@ object WhisperVoice {
         return (0 until a.length()).map { val o = a.getJSONObject(it); o.optString("at") to o.optString("text") }
     }
 
-    private fun remember(context: Context, text: String) {
-        val at = java.text.SimpleDateFormat("dd.MM HH:mm", Locale.ROOT).format(java.util.Date())
+    fun clearHistory(context: Context) = prefs(context).edit().remove(KEY_HISTORY).apply()
+
+    private fun remember(context: Context, text: String, held: Boolean = false) {
+        val at = java.text.SimpleDateFormat("dd.MM HH:mm", Locale.ROOT).format(java.util.Date()) +
+                if (held) " (lisamata)" else ""
         val items = listOf(at to text) + history(context).take(HISTORY_SIZE - 1)
         val a = org.json.JSONArray()
         items.forEach { (t, x) -> a.put(JSONObject().put("at", t).put("text", x)) }
@@ -451,6 +490,45 @@ object WhisperVoice {
     }
 
     private const val HISTORY_SIZE = 10
+
+    // Whisper's usual output for silence or noise (subtitles in its training data)
+    private val HALLUCINATIONS = setOf(
+        "tänan", "tänan teid", "aitäh", "aitäh teile", "head aega", "nägemist",
+        "thank you", "thanks", "thank you for watching", "thanks for watching", "bye", "you", "okay",
+    )
+
+    fun looksLikeHallucination(text: String): Boolean {
+        val t = text.lowercase().replace(Regex("[^\\p{L}\\s]"), " ").trim().replace(Regex("\\s+"), " ")
+        return t.isEmpty() || t in HALLUCINATIONS || "subtiit" in t || "subtitle" in t || "amara" in t
+    }
+
+    /**
+     * Loudness of the last recordings (every 100 ms) with the server's speech times, to tune the
+     * speech threshold for noisy places. Numbers only — no audio, no text. Kept in the app's
+     * external files dir, readable over adb: /sdcard/Android/data/<package>/files/whisper_traces/.
+     */
+    private fun saveTrace(context: Context, stats: RecStats, session: LiveSession?, silenceMs: Int, finalChars: Int) {
+        if (stats.rms.isEmpty()) return
+        val dir = File(context.getExternalFilesDir(null) ?: context.filesDir, "whisper_traces").apply { mkdirs() }
+        val o = JSONObject()
+            .put("at", java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.ROOT).format(java.util.Date()))
+            .put("live", session != null)
+            .put("silence_ms", silenceMs).put("factor", SPEECH_FACTOR).put("min_rms", MIN_SPEECH_RMS)
+            .put("reason", stats.reason).put("total_ms", stats.totalMs)
+            .put("rms_heard", stats.rmsHeard).put("by_server", stats.byServer)
+            .put("final_chars", finalChars)
+            .put("rms", org.json.JSONArray(stats.rms))
+        if (session != null) {
+            val segs = org.json.JSONArray()
+            synchronized(session.segments) { session.segments.forEach { (a, b) -> segs.put(org.json.JSONArray().put(a).put(b)) } }
+            o.put("segments", segs)
+        }
+        File(dir, "${System.currentTimeMillis()}.json").writeText(o.toString())
+        dir.listFiles()?.sortedBy { it.name }?.dropLast(TRACES_KEPT)?.forEach { it.delete() }
+    }
+
+    fun traces(context: Context): List<File> =
+        File(context.getExternalFilesDir(null) ?: context.filesDir, "whisper_traces").listFiles()?.sortedBy { it.name } ?: emptyList()
 
     /** Held text on the toolbar row; a tap types it into the field that is active now. */
     private fun showHeld() {

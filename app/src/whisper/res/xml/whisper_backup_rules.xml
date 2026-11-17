@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older: keep dictated text and recordings out of backups -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="whisper.xml" />
+    <exclude domain="device_sharedpref" path="whisper.xml" />
+    <exclude domain="file" path="whisper_pending/" />
+    <exclude domain="device_file" path="whisper_pending/" />
+</full-backup-content>
