@@ -71,6 +71,7 @@ object WhisperVoice {
     // background below this = quiet room: there the mic level must agree that speech has ended
     // (at home the voice is far above the noise; in a car it is not, so the server decides alone)
     private const val QUIET_ROOM_RMS = 300.0
+    private const val NOISY_EXTRA_MS = 1_000
     // the server alone (mic level never above the threshold) keeps a recording going at most this long
     private const val SERVER_ONLY_LIMIT_MS = 20_000
     private const val TRACES_KEPT = 30
@@ -213,6 +214,7 @@ object WhisperVoice {
         val live = p.getBoolean(KEY_LIVE, false)
         val compress = p.getBoolean(KEY_COMPRESS, true)
         stopRequested = false
+        hiddenStop = false
         recording = true
         held = null // still on the clipboard
         root?.let { hidePreview(it) }
@@ -288,8 +290,11 @@ object WhisperVoice {
      */
     fun onKeyboardHidden() {
         inputActive = false
-        if (recording) stopRequested = true
+        if (recording) { hiddenStop = true; stopRequested = true }
     }
+
+    /** the recording was stopped by the keyboard closing, not by a tap (for the measurements) */
+    @Volatile private var hiddenStop = false
 
     // ---- recording ---------------------------------------------------------------------
 
@@ -363,9 +368,13 @@ object WhisperVoice {
                 if (session != null && session.healthy && (vadEnd >= 0 || session.lastNewTextAt > 0)) {
                     val textQuiet = if (session.lastNewTextAt > 0) SystemClock.elapsedRealtime() - session.lastNewTextAt else Long.MAX_VALUE
                     val speechEnd = maxOf(vadEnd, session.lastSpeechEndMs)
-                    val serverSilent = if (session.vadMessages > 0) speechEnd >= 0 && totalMs - speechEnd >= silenceMs
-                        else speechEnd >= 0 && totalMs - speechEnd >= silenceMs && textQuiet >= SERVER_QUIET_MS
-                    val micAgrees = noise >= QUIET_ROOM_RMS || rmsQuietMs >= minOf(silenceMs, 2_000)
+                    // noisy place (car): the mic cannot confirm the silence, so the server must hear
+                    // a second more of it — 2026-11-18 09:01 the server alone cut a quiet last phrase
+                    val noisy = noise >= QUIET_ROOM_RMS
+                    val need = silenceMs + if (noisy) NOISY_EXTRA_MS else 0
+                    val serverSilent = if (session.vadMessages > 0) speechEnd >= 0 && totalMs - speechEnd >= need
+                        else speechEnd >= 0 && totalMs - speechEnd >= need && textQuiet >= SERVER_QUIET_MS
+                    val micAgrees = noisy || rmsQuietMs >= minOf(silenceMs, 2_000)
                     if (serverSilent && micAgrees) { stats.reason = "server silence"; break }
                     if (totalMs >= NO_SPEECH_MS && speechEnd < 0 && textQuiet >= NO_SPEECH_MS) { stats.reason = "server no speech"; break }
                     if (heardAny && rmsQuietMs >= SERVER_ONLY_LIMIT_MS && textQuiet >= silenceMs) { stats.reason = "server-only limit"; break }
@@ -388,7 +397,7 @@ object WhisperVoice {
             rec.release()
             stats.totalMs = totalMs
             stats.byServer = byServer
-            if (stopRequested) stats.reason = "tap"
+            if (stopRequested) stats.reason = if (hiddenStop) "keyboard hidden" else "tap"
             else if (totalMs >= MAX_MS) stats.reason = "max length"
             android.util.Log.i(TAG, "recorded ${totalMs} ms, live ${if (session != null) "server" else live}, noise %.0f, threshold %.0f, max %.0f, speech $heardAny (server kept it going: $byServer), stopped by tap $stopRequested".format(noise, threshold, maxRms))
         }
