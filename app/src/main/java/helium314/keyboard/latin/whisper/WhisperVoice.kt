@@ -68,6 +68,9 @@ object WhisperVoice {
     private const val SERVER_SPEECH_MS = 1_500
     // live end of speech: also no new server text this long (partials come about every second)
     private const val SERVER_QUIET_MS = 2_000
+    // background below this = quiet room: there the mic level must agree that speech has ended
+    // (at home the voice is far above the noise; in a car it is not, so the server decides alone)
+    private const val QUIET_ROOM_RMS = 300.0
     // the server alone (mic level never above the threshold) keeps a recording going at most this long
     private const val SERVER_ONLY_LIMIT_MS = 20_000
     private const val TRACES_KEPT = 30
@@ -354,13 +357,17 @@ object WhisperVoice {
                 if (rms > threshold || serverHeard) { heardAny = true; segSpeech = true; quietMs = 0 } else quietMs += ms
                 // Live: the server's VAD decides when speech ended. The mic level cannot in a car:
                 // 2026-11-17 road noise was as loud as the voice and no recording stopped by itself.
-                if (session != null && session.healthy && session.lastNewTextAt > 0) {
-                    val speechEnd = session.lastSpeechEndMs
-                    val textQuiet = SystemClock.elapsedRealtime() - session.lastNewTextAt
-                    if (speechEnd >= 0 && totalMs - speechEnd >= silenceMs && textQuiet >= SERVER_QUIET_MS) {
-                        stats.reason = "server silence"; break
-                    }
-                    if (totalMs >= NO_SPEECH_MS && textQuiet >= NO_SPEECH_MS) { stats.reason = "server no speech"; break }
+                // 2026-11-18: partial texts alone were too sparse — a quiet last sentence got none and
+                // was cut. With vad=true the server says where it last heard speech (every ~0.3 s).
+                val vadEnd = session?.vadSpeechEndMs ?: -1L
+                if (session != null && session.healthy && (vadEnd >= 0 || session.lastNewTextAt > 0)) {
+                    val textQuiet = if (session.lastNewTextAt > 0) SystemClock.elapsedRealtime() - session.lastNewTextAt else Long.MAX_VALUE
+                    val speechEnd = maxOf(vadEnd, session.lastSpeechEndMs)
+                    val serverSilent = if (session.vadMessages > 0) speechEnd >= 0 && totalMs - speechEnd >= silenceMs
+                        else speechEnd >= 0 && totalMs - speechEnd >= silenceMs && textQuiet >= SERVER_QUIET_MS
+                    val micAgrees = noise >= QUIET_ROOM_RMS || rmsQuietMs >= minOf(silenceMs, 2_000)
+                    if (serverSilent && micAgrees) { stats.reason = "server silence"; break }
+                    if (totalMs >= NO_SPEECH_MS && speechEnd < 0 && textQuiet >= NO_SPEECH_MS) { stats.reason = "server no speech"; break }
                     if (heardAny && rmsQuietMs >= SERVER_ONLY_LIMIT_MS && textQuiet >= silenceMs) { stats.reason = "server-only limit"; break }
                     continue
                 }

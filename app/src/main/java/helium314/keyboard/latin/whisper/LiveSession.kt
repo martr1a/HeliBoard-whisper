@@ -60,7 +60,7 @@ class LiveSession(
             asked = "s16"
         }
         if (asked == "f32") format = "f32"
-        val full = url + (if ('?' in url) "&" else "?") + "final=true&partial_ms=1000" +
+        val full = url + (if ('?' in url) "&" else "?") + "final=true&partial_ms=1000&vad=true" +
                 (if (language != null) "&language=$language" else "") +
                 (if (asked != "f32") "&format=$asked" else "")
         val request = Request.Builder().url(full)
@@ -78,6 +78,7 @@ class LiveSession(
                         m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { firstText(); heard(it); onSegment(it) }
                     }
                     "partial" -> m.optString("text").trim().takeIf { it.isNotEmpty() }?.let { partials++; firstText(); heard(it); onPartial(it) }
+                    "vad" -> { vadSpeechEndMs = m.optLong("speech_end_ms", -1L); vadMessages++ }
                     "final" -> {
                         finalAt = SystemClock.elapsedRealtime()
                         serverWaitMs = m.optInt("wait_ms", -1)
@@ -106,6 +107,12 @@ class LiveSession(
         private set
     @Volatile private var lastText = ""
     @Volatile private var partials = 0
+    /** where the server's VAD last heard speech, ms of stream audio (server with vad=true); -1 before */
+    @Volatile var vadSpeechEndMs = -1L
+        private set
+    @Volatile var vadMessages = 0
+        private set
+
     /** end of the last utterance the server heard (its VAD), in ms of audio; -1 before the first */
     val lastSpeechEndMs: Long get() = synchronized(segments) { segments.maxOfOrNull { (it.second * 1000).toLong() } ?: -1L }
     val healthy get() = failed == null
@@ -208,6 +215,7 @@ class LiveSession(
             .put("final_after_end_ms", if (finalAt != 0L && endAt != 0L) finalAt - endAt else -1)
             .put("server_wait_ms", serverWaitMs).put("server_asr_ms", serverAsrMs)
             .put("partials", partials).put("segment_count", segments.size)
+            .put("vad_messages", vadMessages).put("vad_speech_end_ms", vadSpeechEndMs)
         failed?.let { o.put("failed", it) }
         return o
     }
